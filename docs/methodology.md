@@ -156,6 +156,23 @@ The plan already specifies `adaptive` thinking + effort per module — compatibl
 
 The R10 risk mitigation in the plan (Mirror-judging-the-mirror) already acknowledges "no temperature available on Opus 4.7" and proposes effort-variation self-consistency instead. That's correct — carry forward.
 
+## 9. Dependency deviations from plan v3
+
+Plan v3 pinned `irrCAC==0.4.4` for Gwet's AC1. The package hard-pins
+`numpy==1.26.4` and `scipy==1.12.0`, which is incompatible with
+`voyageai==0.3.7` (requires `numpy>=2.1.0`). Since Voyage embeddings
+are load-bearing for Module H (the demo beat), we dropped `irrCAC` and
+reimplemented Gwet's AC1 ourselves.
+
+**Implementation target:** `lucid/calibration/validate.py` (Phase 6).
+The formula is closed-form and short (~15 lines). Tests validate against
+worked examples from Gwet's *Handbook of Inter-Rater Reliability*
+(4th ed., 2014) and against the same binary-agreement matrix used by
+the `irrCAC` reference to make sure the numbers match to 4 decimal places.
+
+No other dependency deviations from plan v3 in Phase 1. Locked set verified
+to resolve under Python 3.13.13 via `uv 0.11.7`.
+
 ## 8. Outstanding verifications (to do before the relevant phase)
 
 - [ ] Clone SpiralBench repo and inspect `inter-rater-correlation.ipynb` for human labels (before Phase 6 Module A calibration).
