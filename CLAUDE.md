@@ -126,7 +126,10 @@ tests/                    pytest
 
 **Type hints everywhere.** Including internal functions. Run `mypy lucid/ --strict` cleanly before committing.
 
-**Pydantic v2 for data models.** All cross-module data types live in `lucid/schemas.py`. Don't define ad-hoc dataclasses in modules when a schema model would do.
+**Pydantic v2 for data models.** All cross-module data types live in `lucid/schemas.py`. Don't define ad-hoc dataclasses in modules when a schema model would do. Conventions:
+- Enums are `StrEnum` (Python 3.11+), not `class X(str, Enum)`.
+- All `BaseModel` subclasses use `model_config = ConfigDict(extra="forbid")` so unknown input fields fail loudly instead of silently dropping.
+- Tagged unions (e.g. `ContentBlock`) use `Annotated[A | B | C, Field(discriminator="type")]` with each variant carrying a `Literal["..."]` tag. When adding a new variant: add the class, give it its `Literal` tag, append to the `ContentBlock` union, and the Pydantic machinery handles dispatch.
 
 **Async where it helps.** LLM calls, file I/O on many files. Sync where it doesn't (CLI parsing, deterministic computation).
 
@@ -209,16 +212,22 @@ CITATION_ITP = "Influence Tactics Protocol, https://github.com/synaptiai/influen
 ## Findings provenance
 
 Every `Finding` must populate:
-- `module`: which module produced it
-- `behavior`: specific behavior or classification label
-- `intensity`: 1-3 (for behavior) or repurposed (for other modules)
-- `confidence`: 0-1 from the judge
-- `citation`: paper backing this detection
-- `detected_by`: list of model IDs that agreed (e.g., `["claude-opus-4-7", "qwen-3-max"]` for ensemble)
+- `id`: unique finding ID (sha256 or UUID)
+- `audit_run_id`: FK to `audit_runs.id`
+- `conversation_id`: FK to `conversations.id`; may be `None` for cross-corpus Module H findings
+- `turn_ids` / `turn_ids_hash`: `turn_ids_hash = sha256(",".join(sorted(turn_ids)))`. Part of the finding idempotency key — don't compute it ad-hoc in modules, use the shared helper.
+- `module`: which module produced it (ModuleName enum)
+- `behavior`: specific behavior label or MemorySupport value (Module H)
+- `intensity`: `int | None`. 1-3 for behaviour modules (A, B, C, D, E, F); `None` for Module H (memory support) and Module G (attribution)
+- `confidence`: 0.0-1.0 from the judge
+- `confidence_alpha` / `confidence_beta`: optional Beta-posterior parameters for report CI whiskers
+- `citation`: paper backing this detection (use the `CITATION_*` constants)
+- `detected_by`: non-empty list of model IDs that agreed (e.g., `["claude-opus-4-7", "qwen-3-max"]` for ensemble). Pydantic `min_length=1` + DB `CHECK (detected_by_json != '[]')` both reject empty lists.
 - `explanation`: one-sentence human-readable explanation
 - `detected_at`: UTC timestamp
+- `prompt_version` + `prompt_hash`: which prompt produced this finding; required columns, never inferred. Copied from the prompt file's YAML frontmatter
 
-Missing any of these is a bug. The report generator will fail loudly if a finding is missing provenance.
+Enforcement is two-layer: Pydantic validates at model construction; `store/schema.sql` repeats the constraints as SQLite CHECKs so a bad insert at the raw-SQL layer still fails. Idempotency is enforced by the UNIQUE key `(audit_run_id, module, conversation_id, turn_ids_hash, behavior)` — re-running a module over the same turns raises `sqlite3.IntegrityError` instead of duplicating findings. See `tests/test_store.py::test_finding_idempotency_key_collision` for the contract.
 
 ## LLM usage conventions
 
