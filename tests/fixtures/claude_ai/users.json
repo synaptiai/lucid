@@ -1,0 +1,8 @@
+[
+  {
+    "uuid": "acct-1",
+    "full_name": "Fixture User",
+    "email_address": "fixture@example.com",
+    "verified_phone_number": null
+  }
+]

@@ -1,0 +1,9 @@
+[
+  {
+    "account_uuid": "acct-1",
+    "conversations_memory": "User prefers terse output. LUCID_CANARY_SENTINEL_XYZ123 should never appear in any log handler.",
+    "project_memories": {
+      "proj-fixture-1": "User is a backend engineer working on payment pipelines."
+    }
+  }
+]
