@@ -22,13 +22,20 @@ Research, look up best practices, then create a plan showing three approaches wi
 
 ```bash
 # Install
-uv sync
+uv sync --extra dev
 
 # Run audit on Claude Code sessions
 uv run lucid audit --source claude-code --path ~/.claude/projects --sample 50
 
 # Run audit on Claude.ai export
 uv run lucid audit --source claude-ai --path ./export
+
+# Opt in to Module D (Jain perspective sycophancy; off by default)
+uv run lucid audit --source claude-ai --path ./export --include-module-d
+
+# Bypass the $20 cost gate (both env var + flag required; unattended runs only)
+LUCID_ALLOW_UNATTENDED=1 uv run lucid audit --source claude-ai --path ./export \
+  --yes-i-authorize-spend-up-to 50
 
 # Dry-run (parse and sample but skip Managed Agents orchestration)
 uv run lucid audit --source claude-code --path ... --dry-run
@@ -41,7 +48,7 @@ uv run pytest
 uv run pytest tests/test_ingest_claude_code.py -v
 
 # Type check
-uv run mypy lucid/
+uv run mypy lucid/ --strict
 
 # Lint
 uv run ruff check lucid/
@@ -61,28 +68,35 @@ lucid/ingest/
   claude_code.py          ~/.claude/projects JSONL parser
   claude_ai.py            conversations.json + projects.json + memories.json parser
 
+lucid/logging.py          SafeFormatter — drops records tagged contains_user_content
+lucid/cost.py             count_tokens pre-pass + per-module output budgets
+
 lucid/store/
-  sqlite.py               Corpus and findings storage
-  migrations/             Explicit SQL migrations
+  sqlite.py               Async reads (aiosqlite); sync bulk-insert helper
+  schema.sql              Full DDL with CHECK constraints + UNIQUE idempotency
+  init.py                 initialize_db(path) — applies schema if user_version == 0
 
 lucid/orchestrator/
   managed_agent.py        Managed Agents session setup + streaming
-  mcp_server.py           Local MCP server exposing corpus tools to the agent
+  tools.py                8 custom-tool async handlers (client-executed)
+  handler.py              agent.custom_tool_use event dispatcher
   system_prompt.py        Orchestrator agent's system prompt
 
 lucid/modules/
+  base.py                 CorpusModule / FindingsModule protocols; ModuleError
+  embeddings.py           Voyage wrapper (OpenAI fallback)
   module_a_spiralbench.py SpiralBench behavior scorer (13 behaviors)
-  module_b_sharma.py      Sharma paired-exchange (4 subroutines)
+  module_b_sharma.py      Sharma paired-exchange (4 subroutines; 2 shipped)
   module_c_syceval.py     Progressive/regressive classifier
-  module_d_perspective.py Jain perspective sycophancy
+  module_d_perspective.py Jain perspective sycophancy (OPT-IN via --include-module-d)
   module_e_beliefshift.py DCS-simplified belief drift
   module_f_itp.py         Influence Tactics Protocol on user prompts (9 categories)
   module_g_attribution.py Time/model bucketing (deterministic, no LLM)
   module_h_memory.py      Memory-corpus consistency check
 
 lucid/calibration/
-  spiralbench_data.py     Download + parse SpiralBench labeled data
-  validate.py             Cohen's kappa, precision, recall
+  data.py                 Load SpiralBench + hand-labeled; 30/70 split
+  validate.py             Krippendorff α, Gwet AC1, per-label κ, QWK, BCa bootstrap
 
 lucid/report/
   generator.py            Jinja2 + Chart.js HTML report
@@ -102,9 +116,9 @@ tests/                    pytest
 
 ## Code conventions
 
-**Python 3.11+.** Use modern syntax: `list[str]` not `List[str]`, `X | None` not `Optional[X]`, `match` statements where clear.
+**Python 3.13 exactly** (`requires-python = ">=3.13,<3.14"` — `voyageai` and `irrCAC` gate 3.14). Use modern syntax: `list[str]` not `List[str]`, `X | None` not `Optional[X]`, `match` statements where clear.
 
-**Type hints everywhere.** Including internal functions. Run `mypy lucid/` cleanly before committing.
+**Type hints everywhere.** Including internal functions. Run `mypy lucid/ --strict` cleanly before committing.
 
 **Pydantic v2 for data models.** All cross-module data types live in `lucid/schemas.py`. Don't define ad-hoc dataclasses in modules when a schema model would do.
 
@@ -134,7 +148,8 @@ When adding a new module, copy `module_g_attribution.py` as the skeleton (it's t
 Prompts are markdown files in `prompts/<module>/v<N>.md`.
 
 Each file includes:
-- A YAML frontmatter header with `version`, `model`, `thinking_mode`, `effort`, `citation`, `purpose`. For Opus 4.7 prompts, `thinking_mode ∈ {disabled, adaptive}` and `effort ∈ {low, medium, high, xhigh, max}` — do NOT set `temperature` (rejected by Opus 4.7). For Sonnet 4.6 or legacy models, `temperature` replaces `effort`.
+- A YAML frontmatter header with `version`, `model`, `thinking_mode`, `effort`, `citation`, `purpose`, `hash` (sha256 of prompt body — used for cache-stability audit). For Opus 4.7 prompts, `thinking_mode ∈ {disabled, adaptive}` and `effort ∈ {low, medium, high, xhigh, max}` — do NOT set `temperature` (rejected by Opus 4.7). For Sonnet 4.6 or legacy models, `temperature` replaces `effort`.
+- For Opus-backed prompts, pad the system prompt to ≥ 4096 tokens (Opus 4.7 cache minimum); for Sonnet-backed, ≥ 2048 tokens. Below the threshold, prompt caching silently fails (no error; verify via `cache_creation_input_tokens > 0` or `cache_read_input_tokens > 0`).
 - The actual prompt body.
 - An `## Output Schema` section describing expected JSON structure.
 - An `## Changelog` section noting why this version differs from the previous.
@@ -245,8 +260,9 @@ The orchestrator runs as a Managed Agents session. Key details:
 - Beta header: `managed-agents-2026-04-01`. Verify it's still current on Day 1.
 - Orchestrator model: Sonnet 4.6 (routing work). Heavy reading happens in modules via separate Opus 4.7 calls.
 - Session lifecycle: agent definition is reusable; environments are per-run; sessions are per-audit.
-- Corpus is mounted at `/corpus` inside the container. SQLite database.
-- The orchestrator has tools: `query_corpus`, `run_module`, `store_finding`, `log_progress`. These are exposed via an MCP server in `lucid/orchestrator/mcp_server.py`.
+- **Corpus is NOT mounted.** The orchestrator queries the local process via custom tools (`agent.custom_tool_use` event → local handler → `user.custom_tool_result` reply). No `resources` mount on the environment, no MCP server, no HTTPS tunnel.
+- Custom-tool handlers live in `lucid/orchestrator/tools.py`: `query_corpus`, `get_conversation`, `get_turn_window`, `invoke_module`, `store_finding`, `get_findings`, `log_progress`, `estimate_remaining_cost`.
+- Event dispatcher in `lucid/orchestrator/handler.py` pattern-matches on `event.type`.
 - Stream events to the CLI for real-time progress. Don't just block until completion.
 
 If Managed Agents has friction, fall back path is the Claude Agent SDK (`claude_agent_sdk` package, v0.2.111+ for Opus 4.7 support). Same tool loop; less managed infrastructure.
