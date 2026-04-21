@@ -338,10 +338,14 @@ class ModuleASpiralBench:
         client: AsyncAnthropic,
         *,
         max_concurrency: int = MAX_CONCURRENCY_DEFAULT,
+        chunk_size: int = CHUNK_SIZE,
         prompt_root: str | None = None,
     ) -> None:
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be >= 1")
         self._client = client
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._chunk_size = chunk_size
         # Load + hash-validate the prompt at construction time so a drifted
         # hash surfaces on orchestrator startup, not after the first LLM call.
         kwargs: dict[str, object] = {}
@@ -391,7 +395,7 @@ class ModuleASpiralBench:
         all_windows: list[_Window] = []
         for conv_id in corpus.conversations:
             turns = corpus.turns_by_conversation.get(conv_id, ())
-            all_windows.extend(_iter_windows(conv_id, turns))
+            all_windows.extend(_iter_windows(conv_id, turns, chunk=self._chunk_size))
 
         if not all_windows:
             return []
