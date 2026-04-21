@@ -31,12 +31,14 @@ from lucid.modules.base import ModuleCorpus
 from lucid.schemas import Finding, ModuleName, Role
 
 from .module_a import ModuleAJudge
+from .ollama import OllamaJudge
 from .spiralbench_file import SpiralBenchFileJudge
 from .synthetic_gold import SyntheticGoldJudge
 
 __all__ = [
     "Judge",
     "ModuleAJudge",
+    "OllamaJudge",
     "SpiralBenchFileJudge",
     "SyntheticGoldJudge",
     "findings_to_labeled_turns",

@@ -30,6 +30,7 @@ dependencies = [
     # Reliability, 4th ed.). Dependency deviation from plan recorded in
     # docs/methodology.md §9.
     "filelock==3.29.0",
+    "ollama>=0.6.1",
 ]
 
 [project.optional-dependencies]
