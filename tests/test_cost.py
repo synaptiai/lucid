@@ -51,18 +51,14 @@ def test_heuristic_counter_returns_positive() -> None:
 
 def test_estimator_returns_per_module_entries() -> None:
     conv, turns = _conv()
-    est = CostEstimator().estimate(
-        convs=[conv], turns_by_conv={conv.id: turns}
-    )
+    est = CostEstimator().estimate(convs=[conv], turns_by_conv={conv.id: turns})
     modules_in_estimate = {mc.module for mc in est.per_module}
     assert modules_in_estimate == set(DEFAULT_MODULES)
 
 
 def test_estimator_total_is_sum_of_per_module() -> None:
     conv, turns = _conv(turns_n=20)
-    est = CostEstimator().estimate(
-        convs=[conv], turns_by_conv={conv.id: turns}
-    )
+    est = CostEstimator().estimate(convs=[conv], turns_by_conv={conv.id: turns})
     assert est.total_usd == pytest.approx(sum(mc.usd for mc in est.per_module))
 
 
@@ -84,9 +80,7 @@ def test_estimator_memoizes_counter_per_model_and_conv() -> None:
 
 def test_estimator_module_d_only_included_when_requested() -> None:
     conv, turns = _conv()
-    default = CostEstimator().estimate(
-        convs=[conv], turns_by_conv={conv.id: turns}
-    )
+    default = CostEstimator().estimate(convs=[conv], turns_by_conv={conv.id: turns})
     with_d = CostEstimator().estimate(
         convs=[conv],
         turns_by_conv={conv.id: turns},
@@ -121,8 +115,6 @@ def test_module_profile_prices_exist_in_price_table() -> None:
 
 def test_cached_input_tokens_never_exceed_input_tokens() -> None:
     conv, turns = _conv()
-    est = CostEstimator().estimate(
-        convs=[conv], turns_by_conv={conv.id: turns}
-    )
+    est = CostEstimator().estimate(convs=[conv], turns_by_conv={conv.id: turns})
     for mc in est.per_module:
         assert mc.cached_input_tokens <= mc.input_tokens

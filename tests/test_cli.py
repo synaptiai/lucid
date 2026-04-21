@@ -38,9 +38,12 @@ def test_audit_non_dry_run_without_api_key_exits_usage(tmp_path: Path) -> None:
         app,
         [
             "audit",
-            "--source", "claude-code",
-            "--path", str(tmp_path),
-            "--sample", "1",
+            "--source",
+            "claude-code",
+            "--path",
+            str(tmp_path),
+            "--sample",
+            "1",
         ],
     )
     assert result.exit_code == EXIT_USAGE
@@ -53,9 +56,12 @@ def test_audit_dry_run_succeeds_on_seeded_corpus(tmp_path: Path) -> None:
         app,
         [
             "audit",
-            "--source", "claude-code",
-            "--path", str(tmp_path),
-            "--sample", "1",
+            "--source",
+            "claude-code",
+            "--path",
+            str(tmp_path),
+            "--sample",
+            "1",
             "--dry-run",
         ],
     )
@@ -70,9 +76,12 @@ def test_audit_zero_conversations_exits_usage(tmp_path: Path) -> None:
         app,
         [
             "audit",
-            "--source", "claude-code",
-            "--path", str(tmp_path),
-            "--sample", "5",
+            "--source",
+            "claude-code",
+            "--path",
+            str(tmp_path),
+            "--sample",
+            "5",
             "--dry-run",
         ],
     )
@@ -85,8 +94,10 @@ def test_audit_bad_path_exits_usage(tmp_path: Path) -> None:
         app,
         [
             "audit",
-            "--source", "claude-code",
-            "--path", str(tmp_path / "does-not-exist"),
+            "--source",
+            "claude-code",
+            "--path",
+            str(tmp_path / "does-not-exist"),
             "--dry-run",
         ],
     )
@@ -99,9 +110,12 @@ def test_audit_sample_rejects_bogus_value(tmp_path: Path) -> None:
         app,
         [
             "audit",
-            "--source", "claude-code",
-            "--path", str(tmp_path),
-            "--sample", "banana",
+            "--source",
+            "claude-code",
+            "--path",
+            str(tmp_path),
+            "--sample",
+            "banana",
             "--dry-run",
         ],
     )
@@ -114,9 +128,12 @@ def test_audit_sample_all_parses(tmp_path: Path) -> None:
         app,
         [
             "audit",
-            "--source", "claude-code",
-            "--path", str(tmp_path),
-            "--sample", "all",
+            "--source",
+            "claude-code",
+            "--path",
+            str(tmp_path),
+            "--sample",
+            "all",
             "--dry-run",
         ],
     )
@@ -138,17 +155,19 @@ def _seed_claude_code_corpus(root: Path) -> None:
     records = []
     # 6 turns: long enough to pass min_turns=5 filter.
     for i in range(6):
-        records.append({
-            "type": "user" if i % 2 == 0 else "assistant",
-            "message": {
-                "role": "user" if i % 2 == 0 else "assistant",
-                "content": [{"type": "text", "text": f"turn {i} content"}],
-            },
-            "timestamp": f"2026-04-10T12:00:0{i}Z",
-            "sessionId": "sess-seed",
-            "uuid": f"t-{i}",
-            "parentUuid": f"t-{i-1}" if i else None,
-        })
+        records.append(
+            {
+                "type": "user" if i % 2 == 0 else "assistant",
+                "message": {
+                    "role": "user" if i % 2 == 0 else "assistant",
+                    "content": [{"type": "text", "text": f"turn {i} content"}],
+                },
+                "timestamp": f"2026-04-10T12:00:0{i}Z",
+                "sessionId": "sess-seed",
+                "uuid": f"t-{i}",
+                "parentUuid": f"t-{i - 1}" if i else None,
+            }
+        )
     session.write_text("\n".join(json.dumps(r) for r in records) + "\n")
 
 

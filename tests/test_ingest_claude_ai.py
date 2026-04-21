@@ -43,9 +43,7 @@ def test_claude_ai_branch_reconstruction_preserves_parent_links() -> None:
 def test_claude_ai_mcp_metadata_preserved() -> None:
     results = list(iter_conversations(FIXTURE_ROOT / "conversations.json"))
     branched = next(p for p in results if p.conversation.id == "conv-bbb")
-    tool_use_blocks = [
-        b for t in branched.turns for b in t.blocks if isinstance(b, ToolUseBlock)
-    ]
+    tool_use_blocks = [b for t in branched.turns for b in t.blocks if isinstance(b, ToolUseBlock)]
     assert len(tool_use_blocks) == 1
     tu = tool_use_blocks[0]
     assert tu.is_mcp_app is True
@@ -62,9 +60,7 @@ def test_claude_ai_roles_mapped_from_sender() -> None:
 def test_claude_ai_tool_result_coerces_content() -> None:
     results = list(iter_conversations(FIXTURE_ROOT / "conversations.json"))
     branched = next(p for p in results if p.conversation.id == "conv-bbb")
-    tr = next(
-        b for t in branched.turns for b in t.blocks if isinstance(b, ToolResultBlock)
-    )
+    tr = next(b for t in branched.turns for b in t.blocks if isinstance(b, ToolResultBlock))
     assert tr.content == "healthy"
 
 

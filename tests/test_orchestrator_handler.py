@@ -40,9 +40,7 @@ async def test_dispatch_returns_handler_result() -> None:
 
 async def test_dispatch_unknown_tool_returns_error_result() -> None:
     registry = ToolRegistry()
-    result = await dispatch_tool_call(
-        registry, name="nope", args={}, tool_use_id="tu-2"
-    )
+    result = await dispatch_tool_call(registry, name="nope", args={}, tool_use_id="tu-2")
     assert result.is_error
     payload = json.loads(result.content)
     assert payload["error"] == "unknown_tool"
@@ -53,9 +51,7 @@ async def test_dispatch_handler_exception_surfaced_as_error_result() -> None:
         raise RuntimeError("boom")
 
     registry = _registry_with("kaboom", kaboom)
-    result = await dispatch_tool_call(
-        registry, name="kaboom", args={}, tool_use_id="tu-3"
-    )
+    result = await dispatch_tool_call(registry, name="kaboom", args={}, tool_use_id="tu-3")
     assert result.is_error
     payload = json.loads(result.content)
     assert payload["error"] == "handler_exception"
@@ -67,9 +63,7 @@ async def test_dispatch_passes_through_handler_error_payload() -> None:
         return {"error": "not_found", "message": "no such thing"}
 
     registry = _registry_with("complaining", complaining)
-    result = await dispatch_tool_call(
-        registry, name="complaining", args={}, tool_use_id="tu-4"
-    )
+    result = await dispatch_tool_call(registry, name="complaining", args={}, tool_use_id="tu-4")
     assert result.is_error
     payload = json.loads(result.content)
     assert payload["error"] == "not_found"

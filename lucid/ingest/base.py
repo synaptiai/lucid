@@ -77,9 +77,7 @@ def assert_file_size(path: Path, cap_bytes: int) -> None:
     """Raise IngestError if `path` exceeds `cap_bytes`."""
     size = path.stat().st_size
     if size > cap_bytes:
-        raise IngestError(
-            f"{path} is {size:,} bytes; exceeds cap of {cap_bytes:,} bytes"
-        )
+        raise IngestError(f"{path} is {size:,} bytes; exceeds cap of {cap_bytes:,} bytes")
 
 
 # ──────────────────────────────────────────────────────────────────────────

@@ -91,9 +91,7 @@ def _parse_claude_ai_block(raw: dict[str, Any]) -> ContentBlock | None:
         if not isinstance(thinking, str):
             thinking = str(thinking)
         if len(thinking) > MAX_TEXT_LEN_PER_BLOCK:
-            raise IngestError(
-                f"thinking block exceeds {MAX_TEXT_LEN_PER_BLOCK:,} chars"
-            )
+            raise IngestError(f"thinking block exceeds {MAX_TEXT_LEN_PER_BLOCK:,} chars")
         signature = raw.get("signature")
         return ThinkingBlock(
             thinking=thinking,
@@ -119,9 +117,7 @@ def _parse_claude_ai_block(raw: dict[str, Any]) -> ContentBlock | None:
                 else None
             ),
             mcp_server_url=(
-                raw.get("mcp_server_url")
-                if isinstance(raw.get("mcp_server_url"), str)
-                else None
+                raw.get("mcp_server_url") if isinstance(raw.get("mcp_server_url"), str) else None
             ),
             is_mcp_app=raw.get("is_mcp_app") if isinstance(raw.get("is_mcp_app"), bool) else None,
         )
@@ -132,9 +128,7 @@ def _parse_claude_ai_block(raw: dict[str, Any]) -> ContentBlock | None:
             return None
         content = _coerce_tool_result_content(raw.get("content", ""))
         if len(content) > MAX_TEXT_LEN_PER_BLOCK:
-            raise IngestError(
-                f"tool_result content exceeds {MAX_TEXT_LEN_PER_BLOCK:,} chars"
-            )
+            raise IngestError(f"tool_result content exceeds {MAX_TEXT_LEN_PER_BLOCK:,} chars")
         return ToolResultBlock(
             tool_use_id=tool_use_id,
             content=content,
@@ -177,9 +171,7 @@ def _parse_one_conversation(raw: dict[str, Any]) -> ParsedConversation | None:
         return None
 
     if len(chat_messages) > MAX_TURNS_PER_CONVERSATION:
-        raise IngestError(
-            f"conversation {conv_uuid}: {len(chat_messages)} messages exceeds cap"
-        )
+        raise IngestError(f"conversation {conv_uuid}: {len(chat_messages)} messages exceeds cap")
 
     turns: list[Turn] = []
     for idx, msg in enumerate(chat_messages):
@@ -194,8 +186,7 @@ def _parse_one_conversation(raw: dict[str, Any]) -> ParsedConversation | None:
             raw_blocks = []
         if len(raw_blocks) > MAX_BLOCKS_PER_TURN:
             raise IngestError(
-                f"conversation {conv_uuid} turn {idx}: "
-                f"{len(raw_blocks)} blocks exceeds cap"
+                f"conversation {conv_uuid} turn {idx}: {len(raw_blocks)} blocks exceeds cap"
             )
 
         blocks: list[ContentBlock] = []

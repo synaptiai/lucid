@@ -460,12 +460,8 @@ def _render_summary(
     header = Table.grid(padding=(0, 2))
     header.add_row("[bold]Source[/bold]", source.value)
     header.add_row("[bold]Path[/bold]", str(path))
-    header.add_row(
-        "[bold]Conversations[/bold]", f"{discovered} discovered, {len(sampled)} sampled"
-    )
-    header.add_row(
-        "[bold]Modules[/bold]", ", ".join(m.value for m in enabled_modules)
-    )
+    header.add_row("[bold]Conversations[/bold]", f"{discovered} discovered, {len(sampled)} sampled")
+    header.add_row("[bold]Modules[/bold]", ", ".join(m.value for m in enabled_modules))
     _CONSOLE.print(header)
 
     tbl = Table(title="Estimated cost (dry-run)")
@@ -477,9 +473,7 @@ def _render_summary(
     tbl.add_column("USD", justify="right")
     for mc in estimate.per_module:
         cached_pct = (
-            f"{(mc.cached_input_tokens / mc.input_tokens * 100):.0f}%"
-            if mc.input_tokens
-            else "—"
+            f"{(mc.cached_input_tokens / mc.input_tokens * 100):.0f}%" if mc.input_tokens else "—"
         )
         tbl.add_row(
             mc.module.value,

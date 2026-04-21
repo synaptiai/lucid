@@ -219,9 +219,7 @@ def _update_audit_run_status(
 
 
 def _count_findings(store: CorpusStore, run_id: str) -> int:
-    rows = store.fetchall(
-        "SELECT COUNT(*) as n FROM findings WHERE audit_run_id = ?", (run_id,)
-    )
+    rows = store.fetchall("SELECT COUNT(*) as n FROM findings WHERE audit_run_id = ?", (run_id,))
     return int(rows[0]["n"]) if rows else 0
 
 
@@ -240,9 +238,7 @@ def run_audit(
     prompt_versions: dict[ModuleName, str],
     progress_log: Callable[[str, str], None] | None = None,
     lock_timeout_seconds: float = 0.1,
-    session_runner: Callable[
-        [ManagedAgentsSession, str], Coroutine[Any, Any, SessionOutcome]
-    ]
+    session_runner: Callable[[ManagedAgentsSession, str], Coroutine[Any, Any, SessionOutcome]]
     | None = None,
     run_id: str | None = None,
 ) -> AuditResult:
@@ -326,15 +322,11 @@ def run_audit(
         lock.release()
 
 
-async def _default_session_runner(
-    session: ManagedAgentsSession, kickoff: str
-) -> SessionOutcome:
+async def _default_session_runner(session: ManagedAgentsSession, kickoff: str) -> SessionOutcome:
     return await session.run(kickoff)
 
 
-def _inject_system_prompt_override(
-    session: ManagedAgentsSession, system_prompt: str
-) -> None:
+def _inject_system_prompt_override(session: ManagedAgentsSession, system_prompt: str) -> None:
     """Swap the system-prompt builder on an existing session.
 
     Phase 5B uses a short smoke-mode prompt (see

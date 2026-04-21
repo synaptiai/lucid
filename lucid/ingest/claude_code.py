@@ -145,9 +145,7 @@ def _parse_block(raw: dict[str, Any]) -> ContentBlock | None:
             return None
         content = _coerce_tool_result_content(raw.get("content", ""))
         if len(content) > MAX_TEXT_LEN_PER_BLOCK:
-            raise IngestError(
-                f"tool_result content exceeds {MAX_TEXT_LEN_PER_BLOCK:,} chars"
-            )
+            raise IngestError(f"tool_result content exceeds {MAX_TEXT_LEN_PER_BLOCK:,} chars")
         return ToolResultBlock(
             tool_use_id=tool_use_id,
             content=content,
@@ -232,8 +230,7 @@ def parse_session_file(path: Path) -> ParsedConversation | None:
                 raw_blocks = [{"type": "text", "text": str(raw_blocks)}]
             if len(raw_blocks) > MAX_BLOCKS_PER_TURN:
                 raise IngestError(
-                    f"{path}:{lineno}: {len(raw_blocks)} blocks exceeds cap "
-                    f"{MAX_BLOCKS_PER_TURN}"
+                    f"{path}:{lineno}: {len(raw_blocks)} blocks exceeds cap {MAX_BLOCKS_PER_TURN}"
                 )
 
             blocks: list[ContentBlock] = []
@@ -259,9 +256,7 @@ def parse_session_file(path: Path) -> ParsedConversation | None:
             turns.append(turn)
 
             if len(turns) > MAX_TURNS_PER_CONVERSATION:
-                raise IngestError(
-                    f"{path}: more than {MAX_TURNS_PER_CONVERSATION} turns; aborting"
-                )
+                raise IngestError(f"{path}: more than {MAX_TURNS_PER_CONVERSATION} turns; aborting")
 
     if not turns:
         return None
@@ -271,9 +266,9 @@ def parse_session_file(path: Path) -> ParsedConversation | None:
     turns = [t.model_copy(update={"conversation_id": conv_id}) for t in turns]
 
     timestamps = [t.timestamp for t in turns if t.timestamp is not None]
-    created_at = min(timestamps) if timestamps else datetime.fromtimestamp(
-        path.stat().st_mtime
-    ).astimezone()
+    created_at = (
+        min(timestamps) if timestamps else datetime.fromtimestamp(path.stat().st_mtime).astimezone()
+    )
     updated_at = max(timestamps) if timestamps else created_at
 
     metadata: dict[str, object] = {}
@@ -315,9 +310,7 @@ class ClaudeCodeAdapter(IngestAdapter):
             assert_not_symlink_escape(child, root)
             files.append(child)
             if len(files) > MAX_DISCOVER_FILES:
-                raise IngestError(
-                    f"{root}: more than {MAX_DISCOVER_FILES} .jsonl files; refusing"
-                )
+                raise IngestError(f"{root}: more than {MAX_DISCOVER_FILES} .jsonl files; refusing")
         return files
 
     # ----- parse --------------------------------------------------

@@ -61,9 +61,7 @@ async def dispatch_tool_call(
         _LOGGER.exception("tool %r raised during dispatch", name)
         return ToolResult(
             tool_use_id=tool_use_id,
-            content=to_tool_result_content(
-                {"error": "handler_exception", "message": str(err)}
-            ),
+            content=to_tool_result_content({"error": "handler_exception", "message": str(err)}),
             is_error=True,
         )
 

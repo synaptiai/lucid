@@ -107,9 +107,7 @@ class ManagedAgentsSession:
         self.client = client
         self.registry = registry
         self.config = config
-        self._heartbeat = HeartbeatMonitor(
-            stall_seconds=config.heartbeat_stall_seconds
-        )
+        self._heartbeat = HeartbeatMonitor(stall_seconds=config.heartbeat_stall_seconds)
 
     # ----- lifecycle -----------------------------------------------
 
@@ -153,9 +151,7 @@ class ManagedAgentsSession:
         """Spin up (agent, env, session), send the kickoff, loop on events."""
         agent_id = self.create_agent()
         environment_id = self.create_environment()
-        session_id = self.create_session(
-            agent_id=agent_id, environment_id=environment_id
-        )
+        session_id = self.create_session(agent_id=agent_id, environment_id=environment_id)
         handles = SessionHandles(
             agent_id=agent_id,
             environment_id=environment_id,
@@ -173,9 +169,7 @@ class ManagedAgentsSession:
             events=[
                 {
                     "type": "user.message",
-                    "content": [
-                        {"type": "text", "text": kickoff_message}
-                    ],
+                    "content": [{"type": "text", "text": kickoff_message}],
                 }
             ],
         )
@@ -190,19 +184,16 @@ class ManagedAgentsSession:
 
             if evt_type == "agent.custom_tool_use":
                 outcome.tool_calls += 1
-                tool_name = (
-                    getattr(event, "name", None)
-                    or (event.get("name") if isinstance(event, dict) else None)
+                tool_name = getattr(event, "name", None) or (
+                    event.get("name") if isinstance(event, dict) else None
                 )
-                tool_args = (
-                    getattr(event, "input", None)
-                    or (event.get("input", {}) if isinstance(event, dict) else {})
+                tool_args = getattr(event, "input", None) or (
+                    event.get("input", {}) if isinstance(event, dict) else {}
                 )
                 # The SDK exposes the event's own id via the `id` field; this
                 # is what we echo back as `custom_tool_use_id` on the result.
-                custom_tool_use_id = (
-                    getattr(event, "id", None)
-                    or (event.get("id") if isinstance(event, dict) else None)
+                custom_tool_use_id = getattr(event, "id", None) or (
+                    event.get("id") if isinstance(event, dict) else None
                 )
 
                 result = await dispatch_tool_call(
@@ -217,9 +208,7 @@ class ManagedAgentsSession:
                         {
                             "type": "user.custom_tool_result",
                             "custom_tool_use_id": result.tool_use_id,
-                            "content": [
-                                {"type": "text", "text": result.content}
-                            ],
+                            "content": [{"type": "text", "text": result.content}],
                             "is_error": result.is_error,
                         }
                     ],

@@ -288,9 +288,7 @@ def test_content_block_tool_result() -> None:
 def test_content_block_rejects_wrong_shape() -> None:
     """A tool_use payload with `text` set should fail (extra='forbid')."""
     with pytest.raises(ValidationError):
-        _BLOCK_ADAPTER.validate_python(
-            {"type": "tool_use", "tool_name": "bash", "text": "nope"}
-        )
+        _BLOCK_ADAPTER.validate_python({"type": "tool_use", "tool_name": "bash", "text": "nope"})
 
 
 def test_content_block_rejects_unknown_type() -> None:

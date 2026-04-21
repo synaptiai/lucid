@@ -315,9 +315,7 @@ class CostEstimator:
             )
 
         total = sum(m.usd for m in per_module)
-        return CostEstimate(
-            per_module=tuple(per_module), total_usd=total, conversations=len(convs)
-        )
+        return CostEstimate(per_module=tuple(per_module), total_usd=total, conversations=len(convs))
 
 
 __all__ = [

@@ -63,8 +63,7 @@ the error message at level ERROR, then stop. Do not retry.
 
 
 SMOKE_KICKOFF_MESSAGE = (
-    "Phase 5B smoke test. Follow the system prompt exactly. "
-    "Begin with `query_corpus`."
+    "Phase 5B smoke test. Follow the system prompt exactly. Begin with `query_corpus`."
 )
 
 

@@ -84,10 +84,7 @@ def test_n_zero_returns_empty() -> None:
 def test_stratification_respects_top_n_projects() -> None:
     # 3 big projects (100 each) + 5 small ones (1 each) = 305 convs.
     # Top-3 with top_n_projects=3 should keep only the big three + no-project.
-    big = [
-        _make_conv(1000 + i, project=f"big-{i // 100}", age_days=i % 90)
-        for i in range(300)
-    ]
+    big = [_make_conv(1000 + i, project=f"big-{i // 100}", age_days=i % 90) for i in range(300)]
     small = [_make_conv(2000 + i, project=f"small-{i}", age_days=i) for i in range(5)]
     convs = big + small
     config = SamplingConfig(n=30, top_n_projects=3, stratify_by_project=True, seed=42)
@@ -98,10 +95,7 @@ def test_stratification_respects_top_n_projects() -> None:
 
 
 def test_stratification_disabled_flattens() -> None:
-    convs = [
-        _make_conv(i, project=f"p{i % 3}", age_days=i % 30, turns=10)
-        for i in range(30)
-    ]
+    convs = [_make_conv(i, project=f"p{i % 3}", age_days=i % 30, turns=10) for i in range(30)]
     config = SamplingConfig(n=15, stratify_by_project=False, seed=42)
     result = sample_conversations(convs, config)
     assert len(result) == 15
@@ -115,8 +109,7 @@ def test_recency_weight_biases_toward_recent() -> None:
     convs = [_make_conv(i, turns=10, age_days=i * 2) for i in range(50)]
     reference = datetime(2026, 4, 21, 12, 0, 0, tzinfo=_UTC)
     config = SamplingConfig(
-        n=10, recency_weight=1.0, recency_window_days=30,
-        stratify_by_project=False, seed=42
+        n=10, recency_weight=1.0, recency_window_days=30, stratify_by_project=False, seed=42
     )
     result = sample_conversations(convs, config, reference_time=reference)
     avg_age = sum((reference - c.updated_at).days for c in result) / len(result)
@@ -127,9 +120,7 @@ def test_recency_weight_biases_toward_recent() -> None:
 def test_recency_weight_zero_is_uniform() -> None:
     """With recency_weight=0.0, seeded samples should be stable regardless of age."""
     convs = [_make_conv(i, turns=10, age_days=i * 2) for i in range(50)]
-    config = SamplingConfig(
-        n=10, recency_weight=0.0, stratify_by_project=False, seed=42
-    )
+    config = SamplingConfig(n=10, recency_weight=0.0, stratify_by_project=False, seed=42)
     result_a = sample_conversations(convs, config)
     result_b = sample_conversations(convs, config)
     assert [c.id for c in result_a] == [c.id for c in result_b]
@@ -140,9 +131,7 @@ def test_recency_weight_zero_is_uniform() -> None:
 
 def test_project_filter_keeps_only_listed() -> None:
     convs = [_make_conv(i, project=f"p{i % 4}", turns=10, age_days=i) for i in range(40)]
-    config = SamplingConfig(
-        n=20, project_filter=("p0", "p2"), stratify_by_project=False, seed=42
-    )
+    config = SamplingConfig(n=20, project_filter=("p0", "p2"), stratify_by_project=False, seed=42)
     result = sample_conversations(convs, config)
     assert all(c.project_slug in {"p0", "p2"} for c in result)
 

@@ -86,9 +86,7 @@ def _age_in_days(conv: Conversation, reference: datetime) -> float:
     return max(delta.total_seconds() / 86400.0, 0.0)
 
 
-def _blended_weight(
-    conv: Conversation, *, reference: datetime, config: SamplingConfig
-) -> float:
+def _blended_weight(conv: Conversation, *, reference: datetime, config: SamplingConfig) -> float:
     """Blend uniform and exponential-recency weights via `recency_weight`."""
     if config.recency_weight <= 0.0:
         return 1.0
@@ -101,9 +99,7 @@ def _blended_weight(
     return (config.recency_weight * recency) + ((1.0 - config.recency_weight) * uniform)
 
 
-def _allocate_quota(
-    buckets: dict[str, list[Conversation]], target: int
-) -> dict[str, int]:
+def _allocate_quota(buckets: dict[str, list[Conversation]], target: int) -> dict[str, int]:
     """Allocate `target` across buckets proportional to bucket size.
 
     Rounding residuals are distributed largest-fractional-part first, which
@@ -228,9 +224,7 @@ def sample_conversations(
         if q <= 0:
             continue
         weights = [_blended_weight(c, reference=reference, config=config) for c in stratum]
-        stratified_chosen.extend(
-            _weighted_sample_without_replacement(stratum, weights, q, rng)
-        )
+        stratified_chosen.extend(_weighted_sample_without_replacement(stratum, weights, q, rng))
 
     return _stable_order(stratified_chosen)
 

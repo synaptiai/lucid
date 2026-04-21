@@ -241,9 +241,7 @@ async def test_log_progress_calls_callback(tmp_path: Path) -> None:
     def _progress(level: str, message: str) -> None:
         captured.append((level, message))
 
-    registry = build_tool_registry(
-        store=store, audit_run_id=run_id, progress_log=_progress
-    )
+    registry = build_tool_registry(store=store, audit_run_id=run_id, progress_log=_progress)
     result = await registry.get("log_progress").handler(  # type: ignore[union-attr]
         {"level": "WARNING", "message": "budget tight"}
     )
@@ -257,9 +255,7 @@ async def test_log_progress_calls_callback(tmp_path: Path) -> None:
 
 async def test_estimate_remaining_cost_uses_budget(tmp_path: Path) -> None:
     store, run_id = _seed_store(tmp_path)
-    registry = build_tool_registry(
-        store=store, audit_run_id=run_id, remaining_budget_usd=5.0
-    )
+    registry = build_tool_registry(store=store, audit_run_id=run_id, remaining_budget_usd=5.0)
     result = await registry.get("estimate_remaining_cost").handler({})  # type: ignore[union-attr]
     assert result["budget_usd"] == 5.0
     assert result["accrued_usd"] == 0.0
