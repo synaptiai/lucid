@@ -28,24 +28,27 @@ uv sync --extra dev
 uv run lucid --help
 uv run lucid version
 
-# Run audit on Claude Code sessions (stub until Phase 4)
+# Dry-run (parse + sample + count_tokens cost estimate; no LLM spend)
+# Fully wired since Phase 4 — returns a per-module USD breakdown.
+uv run lucid audit --source claude-code --path ~/.claude/projects --sample 10 --dry-run
+uv run lucid audit --source claude-ai --path ./export --sample 20 --dry-run
+
+# Run audit on Claude Code sessions (stub until Phase 5; exits 2 with hint)
 uv run lucid audit --source claude-code --path ~/.claude/projects --sample 50
 
-# Run audit on Claude.ai export (stub until Phase 4)
+# Run audit on Claude.ai export (stub until Phase 5)
 uv run lucid audit --source claude-ai --path ./export
 
-# Opt in to Module D (Jain perspective sycophancy; off by default) (stub until Phase 4)
-uv run lucid audit --source claude-ai --path ./export --include-module-d
+# Opt in to Module D (Jain perspective sycophancy; off by default)
+# The --include-module-d flag is accepted now; only has effect in a real run (Phase 5).
+uv run lucid audit --source claude-ai --path ./export --include-module-d --dry-run
 
-# Bypass the $20 cost gate (both env var + flag required; unattended runs only) (stub until Phase 4)
+# Bypass the $20 cost gate for unattended runs (flag + env both required; Phase 5)
 LUCID_ALLOW_UNATTENDED=1 uv run lucid audit --source claude-ai --path ./export \
   --yes-i-authorize-spend-up-to 50
 
-# Dry-run (parse and sample but skip Managed Agents orchestration) (stub until Phase 4)
-uv run lucid audit --source claude-code --path ... --dry-run
-
 # Run calibration against SpiralBench (stub until Phase 6)
-uv run lucid calibrate
+uv run lucid calibrate --module a
 
 # Tests
 uv run pytest
@@ -245,7 +248,13 @@ Enforcement is two-layer: Pydantic validates at model construction; `store/schem
 
 **Max tokens**: set explicitly per call. Default budget is 2000 output tokens. Document why if you set higher.
 
-**Cost awareness**: estimate tokens before large batch runs. Prompt the user if estimated cost exceeds $20.
+**Cost awareness**: estimate tokens before large batch runs. The `CostEstimator` in `lucid/cost.py` hits `messages.count_tokens` (free; independent RPM pool per methodology.md §4) for the input side and applies per-module `output_tokens_per_conv` budgets from `MODULE_PROFILES` for the output side. Cache-hit rate is modelled per profile (Module A's padded system prompt = 0.85; ad-hoc modules = 0.50-0.70). Token counts are memoized per `(model, conversation_id)` so N modules on the same model -> 1 count_tokens call per conversation, not N. The $20 gate is `cost.COST_GATE_USD`; surface it with `estimate.exceeds_gate()`.
+
+**CLI exit codes** (in `lucid/cli.py`):
+- `0` — success
+- `2` — usage / config / input error (missing path, zero conversations, bogus flag value, stub command)
+- `3` — cost-gate rejection (user didn't authorize spend; Phase 5)
+- `4` — concurrent-audit lock collision (Phase 5; filelock on the DB)
 
 **Rate limit handling**: exponential backoff with jitter on 429s. Managed Agents handles most of this but belt-and-suspenders.
 
