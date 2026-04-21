@@ -16,6 +16,8 @@ This codebase optimizes for honesty over optimism. Findings must be defensible. 
 
 Be direct in code comments and docstrings. No marketing language. No "revolutionary" or "game-changing." We're shipping a tool, not a landing page.
 
+Research, look up best practices, then create a plan showing three approaches with tradeoffs for decisions I need to make. Use the AskUserQuestion tool for questions and clarifications.
+
 ## Quick reference
 
 ```bash
@@ -132,7 +134,7 @@ When adding a new module, copy `module_g_attribution.py` as the skeleton (it's t
 Prompts are markdown files in `prompts/<module>/v<N>.md`.
 
 Each file includes:
-- A YAML frontmatter header with `version`, `model`, `temperature`, `citation`, `purpose`.
+- A YAML frontmatter header with `version`, `model`, `thinking_mode`, `effort`, `citation`, `purpose`. For Opus 4.7 prompts, `thinking_mode ∈ {disabled, adaptive}` and `effort ∈ {low, medium, high, xhigh, max}` — do NOT set `temperature` (rejected by Opus 4.7). For Sonnet 4.6 or legacy models, `temperature` replaces `effort`.
 - The actual prompt body.
 - An `## Output Schema` section describing expected JSON structure.
 - An `## Changelog` section noting why this version differs from the previous.
@@ -205,7 +207,9 @@ Missing any of these is a bug. The report generator will fail loudly if a findin
 
 **Haiku** for trivial classification where speed matters (not currently used; avoid unless a specific module needs it).
 
-**Temperature**: 0.0 for classification tasks, 0.3 for analytical reading, 0.7 only for explicit diversity sampling (e.g., self-consistency ensemble).
+**Sampling params**: Opus 4.7 rejects `temperature`, `top_p`, `top_k` at any non-default value (400 error) — omit them entirely from Opus 4.7 calls. Use `thinking: {type: "adaptive"}` with `output_config.effort` for steering. Effort ladder: `low` (scoped classification), `medium` (cost-balanced), `high` (analytical reading, most classifiers), `xhigh` (agentic/open-ended), `max` (hardest reasoning). For diversity sampling on Opus 4.7 (self-consistency ensemble), vary `effort` across calls. On Sonnet 4.6 / Haiku 4.5 / legacy models, standard temperature control still applies — default 0.0 for classification, 0.3 for analytical reading.
+
+**Tokenizer note (Opus 4.7)**: new tokenizer, up to 1.35× token count vs. Opus 4.6 for the same text. Re-run `count_tokens` per model; don't reuse Opus 4.6 estimates for 4.7 cost budgeting.
 
 **Max tokens**: set explicitly per call. Default budget is 2000 output tokens. Document why if you set higher.
 
