@@ -28,8 +28,16 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from lucid import __version__
-from lucid.cost import (
+# Load .env.local / .env into os.environ at import time so the CLI picks up
+# API keys without requiring the user to shell-export them. config.load_settings
+# does the same thing, but the CLI's non-dry-run path reads ANTHROPIC_API_KEY
+# directly (not via Settings) so we invoke the loader here too.
+from lucid.config import _load_dotenv_files
+
+_load_dotenv_files()
+
+from lucid import __version__  # noqa: E402
+from lucid.cost import (  # noqa: E402
     COST_GATE_USD,
     DEFAULT_MODULES,
     CostEstimate,
@@ -38,12 +46,18 @@ from lucid.cost import (
     heuristic_counter,
     make_anthropic_counter,
 )
-from lucid.ingest.base import IngestError
-from lucid.ingest.claude_ai import ClaudeAiAdapter
-from lucid.ingest.claude_code import ClaudeCodeAdapter
-from lucid.logging import configure_logging
-from lucid.sampling import SamplingConfig, sample_conversations
-from lucid.schemas import Conversation, ModuleName, Turn
+from lucid.ingest.base import IngestError, fingerprint_corpus  # noqa: E402
+from lucid.ingest.claude_ai import ClaudeAiAdapter  # noqa: E402
+from lucid.ingest.claude_code import ClaudeCodeAdapter  # noqa: E402
+from lucid.logging import configure_logging  # noqa: E402
+from lucid.orchestrator.smoke import (  # noqa: E402
+    SMOKE_KICKOFF_MESSAGE,
+    SMOKE_PROMPT_VERSION,
+    SMOKE_SYSTEM_PROMPT,
+)
+from lucid.run import AuditInputs, LockHeldError, run_audit  # noqa: E402
+from lucid.sampling import SamplingConfig, sample_conversations  # noqa: E402
+from lucid.schemas import Conversation, ModuleName, Source, Turn  # noqa: E402
 
 app = typer.Typer(
     name="lucid",
@@ -172,19 +186,14 @@ def audit(
     sample_n = _parse_sample(sample)
     project_filter = _parse_projects(projects)
 
-    # ----- Phase 4 scope: only dry-run is fully implemented. ----------
-    if not dry_run:
+    # Resume isn't plumbed yet; land in Phase 6 when calibration runs persist
+    # enough state to be worth picking up.
+    if resume is not None:
         _CONSOLE.print(
-            "[yellow]Phase 4 ships --dry-run only. Non-dry runs require the Phase 5 "
-            "Managed Agents pipe; re-run with --dry-run for now.[/yellow]",
-            style="bold",
+            "[yellow]--resume is not yet wired (Phase 6). "
+            "Run without --resume for a fresh audit.[/yellow]"
         )
         raise typer.Exit(EXIT_USAGE)
-
-    # Future phases use these; kept to validate the flag surface now.
-    _ = resume
-    _ = yes_authorize
-    _ = include_module_d
 
     # ----- Dispatch adapters ----------------------------------------
     try:
@@ -206,11 +215,11 @@ def audit(
         raise typer.Exit(EXIT_USAGE)
 
     # ----- Sample --------------------------------------------------
-    config = SamplingConfig(
+    sampling_config = SamplingConfig(
         n=sample_n if sample_n is not None else len(convs_by_id),
         project_filter=project_filter,
     )
-    sampled = sample_conversations(list(convs_by_id.values()), config)
+    sampled = sample_conversations(list(convs_by_id.values()), sampling_config)
     if sample_n is not None and len(sampled) < sample_n:
         _CONSOLE.print(
             f"[yellow]Requested --sample {sample_n} but only {len(sampled)} "
@@ -238,6 +247,81 @@ def audit(
         estimate=estimate,
         enabled_modules=enabled,
     )
+
+    if dry_run:
+        return
+
+    # ----- Cost gate ----------------------------------------------
+    authorized_budget = _authorized_budget(estimate, yes_authorize)
+
+    # ----- Hand off to runner ------------------------------------
+    source_paths: dict[Source, Path] = {}
+    if source in (SourceChoice.CLAUDE_CODE, SourceChoice.ALL):
+        source_paths[Source.CLAUDE_CODE] = path
+    if source in (SourceChoice.CLAUDE_AI, SourceChoice.ALL):
+        source_paths[Source.CLAUDE_AI] = path
+
+    fingerprint = fingerprint_corpus(
+        (c.id, _hash_content(c, turns_by_id.get(c.id, []))) for c in sampled
+    )
+    inputs = AuditInputs(
+        source_paths=source_paths,
+        sampled=sampled,
+        turns_by_conv={c.id: turns_by_id.get(c.id, []) for c in sampled},
+        corpus_fingerprint=fingerprint,
+        sampling_config=sampling_config,
+        estimate=estimate,
+        enabled_modules=enabled,
+        authorized_budget_usd=authorized_budget,
+    )
+
+    # Phase 5B smoke kickoff. Phase 7 swaps to SYSTEM_PROMPT + audit-workflow kickoff.
+    prompt_versions: dict[ModuleName, str] = {}
+
+    data_dir = Path(".lucid")
+    try:
+        client = _anthropic_client_or_exit()
+    except ImportError as err:
+        _CONSOLE.print(f"[red]Anthropic SDK not installed:[/red] {err}")
+        raise typer.Exit(EXIT_USAGE) from err
+
+    _CONSOLE.print(
+        f"[cyan]Launching Managed Agents session (Phase 5B smoke). "
+        f"Budget ceiling: ${authorized_budget:.2f}. This will cost real money.[/cyan]"
+    )
+
+    def _progress(level: str, message: str) -> None:
+        _CONSOLE.print(f"[dim]\\[agent][/dim] \\[{level}] {message}")
+
+    try:
+        result = run_audit(
+            inputs=inputs,
+            data_dir=data_dir,
+            client=client,
+            system_prompt=SMOKE_SYSTEM_PROMPT,
+            kickoff_message=SMOKE_KICKOFF_MESSAGE,
+            prompt_versions=prompt_versions,
+            progress_log=_progress,
+        )
+    except LockHeldError as err:
+        _CONSOLE.print(f"[red]Lock held:[/red] {err}")
+        raise typer.Exit(EXIT_LOCK) from err
+
+    _CONSOLE.print(
+        f"[green]Audit {result.run_id} finished:[/green] status={result.status}, "
+        f"reason={result.reason}, findings_written={result.findings_written}"
+    )
+    if result.outcome is not None:
+        outcome = result.outcome
+        _CONSOLE.print(
+            f"[dim]events={outcome.events_received} tool_calls={outcome.tool_calls} "
+            f"cache_read_tokens={outcome.cache_read_tokens} "
+            f"cache_write_tokens={outcome.cache_write_tokens}[/dim]"
+        )
+    if result.status != "completed":
+        raise typer.Exit(EXIT_USAGE)
+
+    _ = SMOKE_PROMPT_VERSION  # exported for future prompt-version tracking
 
 
 @app.command()
@@ -305,6 +389,62 @@ def _build_counter() -> TokenCounter:
         return heuristic_counter
 
     return make_anthropic_counter(Anthropic(api_key=key))
+
+
+def _anthropic_client_or_exit() -> object:
+    """Return a real `anthropic.Anthropic()` client or raise typer.Exit."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        _CONSOLE.print(
+            "[red]ANTHROPIC_API_KEY is not set. Set it in .env.local or export it.[/red]"
+        )
+        raise typer.Exit(EXIT_USAGE)
+    from anthropic import Anthropic
+
+    return Anthropic(api_key=key)
+
+
+def _authorized_budget(estimate: CostEstimate, yes_authorize: int | None) -> float:
+    """Apply the $20 gate + per-run authorize flag.
+
+    Returns the effective budget ceiling in USD, or raises typer.Exit with
+    code `EXIT_COST_GATE` (3) if the estimate fails the gate.
+    """
+    # Under the default $20 gate, no authorize flag required.
+    if not estimate.exceeds_gate():
+        return max(estimate.total_usd * 1.5, COST_GATE_USD)
+
+    if yes_authorize is None:
+        _CONSOLE.print(
+            f"[red]Estimated cost ${estimate.total_usd:.2f} exceeds the "
+            f"${COST_GATE_USD:.0f} gate.[/red] Re-run with "
+            f"`--yes-i-authorize-spend-up-to N` (and LUCID_ALLOW_UNATTENDED=1 "
+            f"for unattended use) to authorize."
+        )
+        raise typer.Exit(EXIT_COST_GATE)
+
+    if yes_authorize < estimate.total_usd:
+        _CONSOLE.print(
+            f"[red]Estimated cost ${estimate.total_usd:.2f} exceeds your "
+            f"`--yes-i-authorize-spend-up-to {yes_authorize}` ceiling.[/red]"
+        )
+        raise typer.Exit(EXIT_COST_GATE)
+
+    if os.environ.get("LUCID_ALLOW_UNATTENDED") != "1":
+        _CONSOLE.print(
+            "[red]--yes-i-authorize-spend-up-to requires LUCID_ALLOW_UNATTENDED=1 "
+            "in the environment (prevents accidental unattended spend).[/red]"
+        )
+        raise typer.Exit(EXIT_COST_GATE)
+
+    return float(yes_authorize)
+
+
+def _hash_content(conv: Conversation, turns: list[Turn]) -> str:
+    """Tiny hash-of-turns helper reused across CLI + run.py."""
+    from lucid.ingest.base import content_hash_for
+
+    return content_hash_for(conv, turns)
 
 
 def _render_summary(

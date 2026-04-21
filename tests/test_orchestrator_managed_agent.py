@@ -153,7 +153,7 @@ async def test_session_completes_on_status_idle(tmp_path: Path) -> None:
     assert outcome.reason == "session.status_idle"
     assert outcome.handles.agent_id == "agent-fake"
     assert outcome.handles.session_id == "sess-fake"
-    # Kickoff message sent after first event observed.
+    # Kickoff message sent immediately after opening the stream.
     assert client.beta.sessions.events.sent_events
     assert client.beta.sessions.events.sent_events[0][0]["type"] == "user.message"
     store.close()
@@ -211,10 +211,9 @@ async def test_session_create_agent_includes_all_custom_tools(tmp_path: Path) ->
         "estimate_remaining_cost",
     }.issubset(tool_names)
     assert all(t["type"] == "custom" for t in kwargs["tools"])
-    # System prompt is a list-of-blocks carrying cache_control for 1h TTL.
-    system = kwargs["system"]
-    assert isinstance(system, list)
-    assert system[0]["cache_control"]["ttl"] == "1h"
+    # beta.agents.create takes `system` as a plain string (not messages-API blocks).
+    assert isinstance(kwargs["system"], str)
+    assert "Lucid" in kwargs["system"]
     store.close()
 
 

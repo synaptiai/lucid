@@ -187,7 +187,6 @@ def build_tool_registry(
                         "maximum": 1000,
                     },
                 },
-                "additionalProperties": False,
             },
             handler=query_corpus,
         )
@@ -228,7 +227,6 @@ def build_tool_registry(
                     "conversation_id": {"type": "string"},
                 },
                 "required": ["conversation_id"],
-                "additionalProperties": False,
             },
             handler=get_conversation,
         )
@@ -275,7 +273,6 @@ def build_tool_registry(
                     "count": {"type": "integer", "minimum": 1, "maximum": 200, "default": 20},
                 },
                 "required": ["conversation_id"],
-                "additionalProperties": False,
             },
             handler=get_turn_window,
         )
@@ -319,7 +316,6 @@ def build_tool_registry(
                     "model": {"type": "string"},
                 },
                 "required": ["module", "conversation_ids"],
-                "additionalProperties": False,
             },
             handler=invoke_module,
         )
@@ -389,7 +385,6 @@ def build_tool_registry(
                     "prompt_version",
                     "prompt_hash",
                 ],
-                "additionalProperties": True,  # schema is the source of truth; Pydantic validates
             },
             handler=store_finding,
         )
@@ -437,7 +432,6 @@ def build_tool_registry(
                     "module": {"type": "string"},
                     "conversation_id": {"type": "string"},
                 },
-                "additionalProperties": False,
             },
             handler=get_findings,
         )
@@ -465,7 +459,6 @@ def build_tool_registry(
                     },
                 },
                 "required": ["message"],
-                "additionalProperties": False,
             },
             handler=log_progress,
         )
@@ -492,7 +485,6 @@ def build_tool_registry(
             input_schema={
                 "type": "object",
                 "properties": {},
-                "additionalProperties": False,
             },
             handler=estimate_remaining_cost,
         )

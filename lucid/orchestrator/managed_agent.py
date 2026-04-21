@@ -114,10 +114,15 @@ class ManagedAgentsSession:
     # ----- lifecycle -----------------------------------------------
 
     def create_agent(self) -> str:
+        # Managed Agents `beta.agents.create` accepts `system` as a plain
+        # string, not the list-of-blocks + cache_control shape that
+        # `messages.create` uses. Caching for the orchestrator prompt is
+        # handled internally by the agents runtime; we don't set
+        # cache_control here.
         agent = self.client.beta.agents.create(
             name=f"lucid-orchestrator-{self.config.run_id[:8]}",
             model=self.config.orchestrator_model,
-            system=_system_prompt_with_cache_control(),
+            system=SYSTEM_PROMPT,
             tools=self.registry.as_agent_tools(),
         )
         return str(agent.id)
@@ -158,27 +163,26 @@ class ManagedAgentsSession:
         )
         outcome = SessionOutcome(handles=handles, completed=False, reason="running")
 
-        # OPEN STREAM FIRST, then send the kickoff to avoid the race the
-        # docs warn about.
+        # OPEN STREAM FIRST, THEN send kickoff — the SDK buffers events
+        # emitted between open and first-receive, but only if the stream
+        # context is active. We enter the context, send immediately, then
+        # iterate.
         stream_ctx = self.client.beta.sessions.events.stream(session_id)
+        self.client.beta.sessions.events.send(
+            session_id,
+            events=[
+                {
+                    "type": "user.message",
+                    "content": [
+                        {"type": "text", "text": kickoff_message}
+                    ],
+                }
+            ],
+        )
 
         async for event in _iter_stream(stream_ctx):
             self._heartbeat.poke()
             outcome.events_received += 1
-
-            if outcome.events_received == 1:
-                # First event tells us the stream is open; send the kickoff.
-                self.client.beta.sessions.events.send(
-                    session_id,
-                    events=[
-                        {
-                            "type": "user.message",
-                            "content": [
-                                {"type": "text", "text": kickoff_message}
-                            ],
-                        }
-                    ],
-                )
 
             evt_type = getattr(event, "type", None) or (
                 event.get("type") if isinstance(event, dict) else None
@@ -194,24 +198,28 @@ class ManagedAgentsSession:
                     getattr(event, "input", None)
                     or (event.get("input", {}) if isinstance(event, dict) else {})
                 )
-                tool_use_id = (
-                    getattr(event, "tool_use_id", None)
-                    or (event.get("tool_use_id") if isinstance(event, dict) else None)
+                # The SDK exposes the event's own id via the `id` field; this
+                # is what we echo back as `custom_tool_use_id` on the result.
+                custom_tool_use_id = (
+                    getattr(event, "id", None)
+                    or (event.get("id") if isinstance(event, dict) else None)
                 )
 
                 result = await dispatch_tool_call(
                     self.registry,
                     name=str(tool_name),
                     args=dict(tool_args or {}),
-                    tool_use_id=str(tool_use_id),
+                    tool_use_id=str(custom_tool_use_id),
                 )
                 self.client.beta.sessions.events.send(
                     session_id,
                     events=[
                         {
                             "type": "user.custom_tool_result",
-                            "tool_use_id": result.tool_use_id,
-                            "content": result.content,
+                            "custom_tool_use_id": result.tool_use_id,
+                            "content": [
+                                {"type": "text", "text": result.content}
+                            ],
                             "is_error": result.is_error,
                         }
                     ],
@@ -255,21 +263,6 @@ def _get_usage_field(usage: Any, field_name: str) -> int | None:
         v = usage.get(field_name)
         return int(v) if v is not None else None
     return None
-
-
-def _system_prompt_with_cache_control() -> list[dict[str, Any]]:
-    """Return the system prompt as a single content block with cache_control.
-
-    The 1-hour TTL matches the plan: the orchestrator prompt is stable
-    across every session in a multi-module audit.
-    """
-    return [
-        {
-            "type": "text",
-            "text": SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral", "ttl": "1h"},
-        }
-    ]
 
 
 async def _iter_stream(stream_ctx: Any) -> AsyncIterator[Any]:

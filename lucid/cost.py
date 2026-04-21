@@ -216,18 +216,29 @@ def heuristic_counter(model: str, turns: list[Turn]) -> int:
 
 
 def _turns_to_messages(turns: list[Turn]) -> list[dict[str, str]]:
-    """Flatten turns to the Messages-API shape count_tokens expects."""
+    """Flatten turns to the Messages-API shape count_tokens expects.
+
+    Empty-content turns (tool-result-only, system-only) are skipped — the
+    API rejects `{"role": "user", "content": ""}` with a 400. When every
+    turn is empty, we synthesize one placeholder message so count_tokens
+    still returns a meaningful estimate instead of raising.
+    """
     out: list[dict[str, str]] = []
     last_role: str | None = None
     for t in turns:
+        content = t.content
+        if not content:
+            continue
         role = "assistant" if t.role == Role.ASSISTANT else "user"
         if role == last_role and out:
             # Messages API collapses consecutive same-role turns; we follow
             # suit to keep the count faithful.
-            out[-1]["content"] += "\n" + t.content
+            out[-1]["content"] += "\n" + content
         else:
-            out.append({"role": role, "content": t.content or ""})
+            out.append({"role": role, "content": content})
             last_role = role
+    if not out:
+        out.append({"role": "user", "content": "(empty conversation)"})
     return out
 
 

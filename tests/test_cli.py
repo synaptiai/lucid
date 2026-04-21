@@ -31,7 +31,8 @@ def test_audit_requires_source_and_path() -> None:
     assert result.exit_code != 0
 
 
-def test_audit_non_dry_run_exits_until_phase_5(tmp_path: Path) -> None:
+def test_audit_non_dry_run_without_api_key_exits_usage(tmp_path: Path) -> None:
+    """conftest strips ANTHROPIC_API_KEY; non-dry-run should bail clearly."""
     _seed_claude_code_corpus(tmp_path)
     result = runner.invoke(
         app,
@@ -43,6 +44,7 @@ def test_audit_non_dry_run_exits_until_phase_5(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == EXIT_USAGE
+    assert "ANTHROPIC_API_KEY" in result.stdout
 
 
 def test_audit_dry_run_succeeds_on_seeded_corpus(tmp_path: Path) -> None:
