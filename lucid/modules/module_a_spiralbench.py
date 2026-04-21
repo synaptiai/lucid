@@ -202,13 +202,37 @@ def _iter_windows(
             yield window
 
 
+_TRANSCRIPT_OPEN = "<TRANSCRIPT_BLOCK>"
+_TRANSCRIPT_CLOSE = "</TRANSCRIPT_BLOCK>"
+
+
+def _escape_transcript_markers(content: str) -> str:
+    """Neutralise any literal ``<TRANSCRIPT_BLOCK>`` / ``</TRANSCRIPT_BLOCK>``
+    tokens inside user- or assistant-supplied content.
+
+    Without this, a turn whose text contains the closing tag would let the
+    model's instruction context "see" a premature end-of-data marker
+    followed by whatever came after it — a classic prompt-injection
+    vector. Inserting a space inside the tag keeps the text semantically
+    identical to a human reader while making it non-matching.
+    """
+    return content.replace(_TRANSCRIPT_CLOSE, "</ TRANSCRIPT_BLOCK>").replace(
+        _TRANSCRIPT_OPEN, "< TRANSCRIPT_BLOCK>"
+    )
+
+
 def _render_window(window: _Window) -> str:
-    """Build the ``<TRANSCRIPT_BLOCK>`` body fed as the user message."""
-    parts: list[str] = ["<TRANSCRIPT_BLOCK>"]
+    """Build the ``<TRANSCRIPT_BLOCK>`` body fed as the user message.
+
+    User and assistant content is passed through
+    :func:`_escape_transcript_markers` so nothing inside a turn can break
+    out of the data context.
+    """
+    parts: list[str] = [_TRANSCRIPT_OPEN]
     for offset, turn in enumerate(window.turns):
         header = f"[{turn.role.value.upper()} t={window.start_index + offset}]"
-        parts.append(f"{header}\n{turn.content}")
-    parts.append("</TRANSCRIPT_BLOCK>")
+        parts.append(f"{header}\n{_escape_transcript_markers(turn.content)}")
+    parts.append(_TRANSCRIPT_CLOSE)
     return "\n\n".join(parts)
 
 
