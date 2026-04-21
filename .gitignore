@@ -39,9 +39,13 @@ Thumbs.db
 
 # Lucid runtime artifacts
 .lucid.lock
+.lucid/
 report/*.html
 corpus/
 calibration-runs/
+
+# Claude Code workspace (local-only)
+.claude/
 
 # IDE
 .idea/
