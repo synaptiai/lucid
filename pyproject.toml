@@ -70,6 +70,10 @@ select = [
 ignore = [
     "E501", # line length handled by formatter
 ]
+# Math / Greek letters appear in docstrings for IAA metrics (Krippendorff α,
+# Gwet AC1, Cohen's κ) and numeric thresholds (≥, ≤, ², ×). Whitelisting
+# them here keeps RUF001/002/003 clean without per-line noqa noise.
+allowed-confusables = ["α", "κ", "π", "β", "γ", "Σ", "×", "²", "≥", "≤", "–", "—"]
 
 [tool.mypy]
 strict = true
@@ -80,7 +84,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["ijson", "ijson.*"]
+module = ["ijson", "ijson.*", "scipy", "scipy.*", "krippendorff"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
