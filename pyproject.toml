@@ -91,3 +91,10 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
+filterwarnings = [
+    # Low-variance fixture corpora trip scipy's BCa degeneracy warnings.
+    # Production calibration uses 200+ real labels with actual variance
+    # so these warnings are a fixture artifact, not a code smell.
+    "ignore::scipy.stats.DegenerateDataWarning",
+    "ignore:invalid value encountered in scalar divide:RuntimeWarning",
+]

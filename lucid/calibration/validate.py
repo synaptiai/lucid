@@ -66,15 +66,31 @@ def krippendorff_alpha(
     ratings: np.ndarray,
     level: KrippendorffLevel = "nominal",
 ) -> float:
-    """Krippendorff's α. ``ratings`` is (n_raters, n_items); NaN = missing."""
+    """Krippendorff's α. ``ratings`` is (n_raters, n_items); NaN = missing.
+
+    Returns ``float('nan')`` when the domain collapses to a single value
+    (all raters on all items picked the same category). The upstream
+    library raises ``ValueError`` in that case — a legit outcome for
+    zero-prevalence behaviors in a calibration run, and one the caller
+    should surface as "metric undefined" rather than crash the whole
+    report.
+    """
     if ratings.size == 0:
         raise ValueError("ratings must be non-empty")
-    return float(
-        krippendorff.alpha(
-            reliability_data=ratings,
-            level_of_measurement=level,
+    try:
+        return float(
+            krippendorff.alpha(
+                reliability_data=ratings,
+                level_of_measurement=level,
+            )
         )
-    )
+    except ValueError as err:
+        # "There has to be more than one value in the domain" and related
+        # degeneracies collapse to NaN. Other ValueErrors (e.g. bad shape)
+        # still propagate — we only swallow the single-value-domain case.
+        if "more than one value" in str(err) or "domain" in str(err):
+            return float("nan")
+        raise
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -225,21 +241,46 @@ def bootstrap_metric(
         raise ValueError("bootstrap requires at least 2 items")
 
     point = metric_fn(ratings)
+
+    # Degenerate point estimate (e.g. Krippendorff α on zero-variance data)
+    # → skip the bootstrap; scipy would reject NaN statistics and a NaN CI
+    # is more honest than a fabricated one.
+    if not np.isfinite(point):
+        return MetricResult(
+            name=metric_fn.__name__,
+            value=point,
+            ci_low=None,
+            ci_high=None,
+            n_items=int(ratings.shape[1]),
+        )
+
     indices = np.arange(ratings.shape[1])
 
     def _statistic(idx_sample: np.ndarray) -> float:
         # scipy passes `axis=-1` but with vectorized=False it calls scalar-style.
         return metric_fn(ratings[:, idx_sample.astype(int)])
 
-    result = stats.bootstrap(
-        (indices,),
-        _statistic,
-        n_resamples=n_resamples,
-        confidence_level=confidence,
-        method="BCa",
-        vectorized=False,
-        random_state=rng,
-    )
+    try:
+        result = stats.bootstrap(
+            (indices,),
+            _statistic,
+            n_resamples=n_resamples,
+            confidence_level=confidence,
+            method="BCa",
+            vectorized=False,
+            random_state=rng,
+        )
+    except ValueError:
+        # BCa can fail when every resample collapses to the same value
+        # (all-zero variance, tiny item counts). Fall back to reporting
+        # the point estimate without a CI rather than aborting the run.
+        return MetricResult(
+            name=metric_fn.__name__,
+            value=point,
+            ci_low=None,
+            ci_high=None,
+            n_items=int(ratings.shape[1]),
+        )
 
     return MetricResult(
         name=metric_fn.__name__,

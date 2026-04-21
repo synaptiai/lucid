@@ -330,18 +330,176 @@ def calibrate(
         CalibrateModule,
         typer.Option("--module", help="Which module to calibrate against ground truth."),
     ],
+    human_labels: Annotated[
+        Path | None,
+        typer.Option(
+            "--human-labels",
+            help="JSONL of LabeledTurn rows from the human labeler (ground truth).",
+        ),
+    ] = None,
+    judge_labels: Annotated[
+        Path | None,
+        typer.Option(
+            "--judge-labels",
+            help="JSONL of LabeledTurn rows produced by the LLM judge on the same turns.",
+        ),
+    ] = None,
+    test_frac: Annotated[
+        float,
+        typer.Option(
+            "--test-frac",
+            help="Fraction of shared turns held out for reported metrics (rest is training).",
+        ),
+    ] = 0.3,
+    seed: Annotated[
+        int,
+        typer.Option("--seed", help="RNG seed for the train/test split + bootstrap."),
+    ] = 42,
+    n_bootstrap: Annotated[
+        int,
+        typer.Option("--n-bootstrap", help="Resamples for BCa bootstrap CIs."),
+    ] = 2000,
+    behaviors_csv: Annotated[
+        str | None,
+        typer.Option(
+            "--behaviors",
+            help="Comma-separated subset of behaviors to score. Default: all 17.",
+        ),
+    ] = None,
     prompt_version: Annotated[
         str | None,
         typer.Option("--prompt-version", help="Pin to a specific prompt version (e.g. 'v2')."),
     ] = None,
+    write_markdown: Annotated[
+        Path | None,
+        typer.Option(
+            "--write-markdown",
+            help="If set, write a markdown report to this path (append-safe).",
+        ),
+    ] = None,
 ) -> None:
-    """Run calibration against labeled data. (Stub — wired in Phase 6.)"""
-    _ = module
-    _ = prompt_version
-    _CONSOLE.print(
-        "[yellow]lucid calibrate is not yet implemented (Phase 6 wires this command).[/yellow]"
+    """Compute inter-annotator agreement between human and judge labels.
+
+    Phase 6A scope: compares two pre-computed ``LabeledTurn`` JSONL files
+    (human ground truth and LLM-judge predictions) and reports per-behavior
+    Krippendorff α, Gwet AC1, Cohen κ, and QWK on intensity — each with a
+    95% BCa bootstrap CI. Does not call the LLM. Phase 6B will add an
+    ``--auto-judge`` flag that runs Module A on the held-out split and
+    generates the judge labels in-place (behind the cost gate).
+    """
+    if module != CalibrateModule.A:
+        _CONSOLE.print(
+            f"[yellow]Calibration for Module {module.value.upper()} lands in a later phase "
+            "(Phase 8 for H; other modules do not have calibration targets).[/yellow]"
+        )
+        raise typer.Exit(EXIT_USAGE)
+
+    if human_labels is None or judge_labels is None:
+        _CONSOLE.print(
+            "[red]`lucid calibrate --module a` requires "
+            "--human-labels PATH and --judge-labels PATH.[/red]"
+        )
+        _CONSOLE.print(
+            "[dim]Each file is JSONL of LabeledTurn rows "
+            "(see lucid/calibration/data.py for schema).[/dim]"
+        )
+        raise typer.Exit(EXIT_USAGE)
+
+    _run_calibrate_module_a(
+        human_labels_path=human_labels,
+        judge_labels_path=judge_labels,
+        test_frac=test_frac,
+        seed=seed,
+        n_bootstrap=n_bootstrap,
+        behaviors_csv=behaviors_csv,
+        prompt_version_override=prompt_version,
+        write_markdown=write_markdown,
     )
-    raise typer.Exit(EXIT_USAGE)
+
+
+def _run_calibrate_module_a(
+    *,
+    human_labels_path: Path,
+    judge_labels_path: Path,
+    test_frac: float,
+    seed: int,
+    n_bootstrap: int,
+    behaviors_csv: str | None,
+    prompt_version_override: str | None,
+    write_markdown: Path | None,
+) -> None:
+    """Module A calibration flow. Pulled out of the Typer command for
+    readability + direct unit-test coverage without CliRunner plumbing."""
+    from lucid.calibration.data import load_hand_labels, train_test_split
+    from lucid.calibration.report import compute_calibration, render_markdown, render_rich_table
+    from lucid.modules.module_a_spiralbench import BEHAVIORS as MODULE_A_BEHAVIORS
+    from lucid.modules.module_a_spiralbench import PROMPT_VERSION as MODULE_A_PROMPT_VERSION
+
+    try:
+        human = load_hand_labels(human_labels_path)
+        judge = load_hand_labels(judge_labels_path)
+    except (ValueError, OSError) as err:
+        _CONSOLE.print(f"[red]Failed to load labels:[/red] {err}")
+        raise typer.Exit(EXIT_USAGE) from err
+
+    if not human or not judge:
+        _CONSOLE.print("[red]One or both label files are empty after parsing.[/red]")
+        raise typer.Exit(EXIT_USAGE)
+
+    human_keys = {(lt.conversation_id, lt.turn_id) for lt in human}
+    judge_keys = {(lt.conversation_id, lt.turn_id) for lt in judge}
+    shared = sorted(human_keys & judge_keys)
+    if not shared:
+        _CONSOLE.print(
+            "[red]No overlapping (conversation_id, turn_id) pairs between the two label files.[/red]"
+        )
+        raise typer.Exit(EXIT_USAGE)
+
+    _, test_keys = train_test_split(shared, test_frac=test_frac, seed=seed)
+    if len(test_keys) < 2:
+        _CONSOLE.print(
+            f"[red]Held-out split has {len(test_keys)} items — need ≥ 2 for bootstrap.[/red]"
+        )
+        raise typer.Exit(EXIT_USAGE)
+
+    test_set = set(test_keys)
+    human_in_test = [lt for lt in human if (lt.conversation_id, lt.turn_id) in test_set]
+    judge_in_test = [lt for lt in judge if (lt.conversation_id, lt.turn_id) in test_set]
+
+    if behaviors_csv:
+        requested = [b.strip() for b in behaviors_csv.split(",") if b.strip()]
+        unknown = [b for b in requested if b not in MODULE_A_BEHAVIORS]
+        if unknown:
+            _CONSOLE.print(f"[red]Unknown behaviors: {unknown}.[/red]")
+            raise typer.Exit(EXIT_USAGE)
+        behaviors_to_score = requested
+    else:
+        behaviors_to_score = list(MODULE_A_BEHAVIORS)
+
+    try:
+        report = compute_calibration(
+            labels_by_rater={"human": human_in_test, "judge": judge_in_test},
+            behaviors=behaviors_to_score,
+            turn_keys=test_keys,
+            module="A",
+            prompt_version=prompt_version_override or MODULE_A_PROMPT_VERSION,
+            n_bootstrap=n_bootstrap,
+            seed=seed,
+        )
+    except ValueError as err:
+        _CONSOLE.print(f"[red]Calibration failed:[/red] {err}")
+        raise typer.Exit(EXIT_USAGE) from err
+
+    render_rich_table(report, _CONSOLE)
+
+    if write_markdown is not None:
+        write_markdown.parent.mkdir(parents=True, exist_ok=True)
+        existing = write_markdown.read_text(encoding="utf-8") if write_markdown.is_file() else ""
+        with write_markdown.open("w", encoding="utf-8") as f:
+            if existing:
+                f.write(existing.rstrip() + "\n\n")
+            f.write(render_markdown(report) + "\n")
+        _CONSOLE.print(f"[green]Wrote markdown report to[/green] {write_markdown}")
 
 
 # ──────────────────────────────────────────────────────────────────────────
