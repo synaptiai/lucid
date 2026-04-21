@@ -186,6 +186,8 @@ When iterating a prompt:
 
 **What not to test**: exact prompt strings. Prompts will change. Test the output parsing and the module's handling of expected/unexpected LLM responses.
 
+**Canary-sentinel pattern for log redaction**: when a code path handles sensitive content (memories, corpus excerpts), the companion test plants a literal sentinel string in the input, runs the code path with `configure_logging("DEBUG")` + `caplog`, and asserts the sentinel never appears in `caplog.records`. See `tests/test_ingest_contract.py::test_memory_content_never_reaches_debug_log`. Add one of these for any new code path that touches user content.
+
 ## Research citations
 
 Every finding cites a paper. Citations use a consistent format:
@@ -264,9 +266,13 @@ Enforcement is two-layer: Pydantic validates at model construction; `store/schem
 
 1. Files live at `~/.claude/projects/<project-slug>/<session-id>.jsonl`. One JSON object per line.
 2. Schema varies slightly by Claude Code version. Handle missing fields defensively.
-3. Daniel's corpus: 44 project directories, 9,840 session files. Sampling is mandatory, not optional.
+3. Daniel's corpus (2026-04-21 snapshot): 44 project directories, 9,887 discovered `.jsonl` files, 9,880 parseable (7 had no valid turns after meta-record filtering), 499,166 total turns. Sampling is mandatory, not optional.
 4. Many sessions are trivially short (open-and-exit). Default filter: skip sessions with fewer than 5 turns.
 5. Thinking blocks have `signature` fields matching Claude.ai format.
+6. **Meta-record types beyond BUILD_GUIDE §3.1.** Real sessions contain `type` values not documented there: `progress` (agent activity log), `hook` (pre/post-tool hook callback), `compaction` (context-compaction checkpoint). All carry no `message` object and should be skipped silently. The canonical skip-set lives in `lucid.ingest.claude_code._SKIP_RECORD_TYPES` — add new ones there when you find them.
+7. **`image` content blocks** appear in sessions using vision tooling (screenshots). Lucid doesn't operate on pixels; `_parse_block` returns `None` at DEBUG level. If a future module needs them, add an `ImageBlock` schema variant and wire the parser.
+8. **Nested `subagents/` subdirectories.** Agent-spawned sub-sessions land at `<session-uuid>/subagents/agent-<slug>.jsonl`. `rglob("*.jsonl")` picks these up automatically; treat them as first-class sessions (they are — they produced real model output).
+9. **Performance baseline (don't regress):** `ClaudeCodeAdapter.parse_all()` on the full 9,880-session corpus completes in ~37s with `ProcessPoolExecutor(max_workers=os.cpu_count())` on M-series silicon. If a change pushes this past 60s, investigate before merging.
 
 ## Managed Agents conventions
 
