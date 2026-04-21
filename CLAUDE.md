@@ -287,13 +287,18 @@ Enforcement is two-layer: Pydantic validates at model construction; `store/schem
 
 The orchestrator runs as a Managed Agents session. Key details:
 
-- Beta header: `managed-agents-2026-04-01`. Verify it's still current on Day 1.
+- Beta header: `managed-agents-2026-04-01` (exported as `MANAGED_AGENTS_BETA_HEADER`). The SDK sets it automatically; re-verify the constant if `anthropic` is bumped.
 - Orchestrator model: Sonnet 4.6 (routing work). Heavy reading happens in modules via separate Opus 4.7 calls.
 - Session lifecycle: agent definition is reusable; environments are per-run; sessions are per-audit.
 - **Corpus is NOT mounted.** The orchestrator queries the local process via custom tools (`agent.custom_tool_use` event → local handler → `user.custom_tool_result` reply). No `resources` mount on the environment, no MCP server, no HTTPS tunnel.
 - Custom-tool handlers live in `lucid/orchestrator/tools.py`: `query_corpus`, `get_conversation`, `get_turn_window`, `invoke_module`, `store_finding`, `get_findings`, `log_progress`, `estimate_remaining_cost`.
 - Event dispatcher in `lucid/orchestrator/handler.py` pattern-matches on `event.type`.
 - Stream events to the CLI for real-time progress. Don't just block until completion.
+- **Race avoidance:** `ManagedAgentsSession.run()` opens `beta.sessions.events.stream(session_id)` FIRST, then sends the kickoff `user.message` event only after observing the first event on the stream. Re-ordering (send-then-stream) recreates the race the SDK docs warn about — events emitted in the gap are buffered but easy to miss when debugging.
+- **Handler error protocol:** custom-tool handlers return structured `{"error": "...", "message": "..."}` payloads instead of raising. `dispatch_tool_call` surfaces exceptions as `{"error": "handler_exception"}` as a safety net, but intentional errors (not_found, integrity_error, validation_error) should be returned values. One bad arg from the orchestrator must not abort the session; every handler treats the orchestrator as an untrusted caller.
+- **System-prompt cache shape:** `client.beta.agents.create(system=[...])` expects a list of content blocks. For 1h cache TTL on the orchestrator prompt, the shape is `[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]`. Passing a raw string works but loses the cache; verify with `response.usage.cache_read_input_tokens > 0` on the second session. `lucid.orchestrator.managed_agent._system_prompt_with_cache_control()` returns the correct shape.
+- **Registry binding:** `build_tool_registry(store, audit_run_id, progress_log, remaining_budget_usd)` closes handlers over per-run context. Never register tools against a shared global; the (store, run_id) tuple must be fresh per audit so `store_finding` attaches to the right row.
+- **PROMPT_VERSION keying:** `lucid.orchestrator.system_prompt.PROMPT_VERSION` is the version string Findings carry in their `prompt_version` column. Bump it whenever `SYSTEM_PROMPT` changes or calibration numbers recorded against the old version become stale.
 
 If Managed Agents has friction, fall back path is the Claude Agent SDK (`claude_agent_sdk` package, v0.2.111+ for Opus 4.7 support). Same tool loop; less managed infrastructure.
 
