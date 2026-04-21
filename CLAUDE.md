@@ -24,23 +24,27 @@ Research, look up best practices, then create a plan showing three approaches wi
 # Install
 uv sync --extra dev
 
-# Run audit on Claude Code sessions
+# Smoke-check CLI wiring (works today; Phase 1 scaffolding)
+uv run lucid --help
+uv run lucid version
+
+# Run audit on Claude Code sessions (stub until Phase 4)
 uv run lucid audit --source claude-code --path ~/.claude/projects --sample 50
 
-# Run audit on Claude.ai export
+# Run audit on Claude.ai export (stub until Phase 4)
 uv run lucid audit --source claude-ai --path ./export
 
-# Opt in to Module D (Jain perspective sycophancy; off by default)
+# Opt in to Module D (Jain perspective sycophancy; off by default) (stub until Phase 4)
 uv run lucid audit --source claude-ai --path ./export --include-module-d
 
-# Bypass the $20 cost gate (both env var + flag required; unattended runs only)
+# Bypass the $20 cost gate (both env var + flag required; unattended runs only) (stub until Phase 4)
 LUCID_ALLOW_UNATTENDED=1 uv run lucid audit --source claude-ai --path ./export \
   --yes-i-authorize-spend-up-to 50
 
-# Dry-run (parse and sample but skip Managed Agents orchestration)
+# Dry-run (parse and sample but skip Managed Agents orchestration) (stub until Phase 4)
 uv run lucid audit --source claude-code --path ... --dry-run
 
-# Run calibration against SpiralBench
+# Run calibration against SpiralBench (stub until Phase 6)
 uv run lucid calibrate
 
 # Tests
@@ -58,7 +62,7 @@ uv run ruff format lucid/
 ## Architecture map
 
 ```
-lucid/cli.py              CLI entry (Click/Typer)
+lucid/cli.py              CLI entry (Typer)
 lucid/schemas.py          Pydantic models — authoritative data types
 lucid/config.py           Settings, paths, API keys from env
 lucid/sampling.py         Corpus sampling (stratified + recency-weighted)
@@ -96,7 +100,9 @@ lucid/modules/
 
 lucid/calibration/
   data.py                 Load SpiralBench + hand-labeled; 30/70 split
-  validate.py             Krippendorff α, Gwet AC1, per-label κ, QWK, BCa bootstrap
+  validate.py             Krippendorff α (via krippendorff lib), Gwet AC1
+                          (hand-rolled — see methodology.md §9), per-label κ,
+                          QWK, BCa bootstrap
 
 lucid/report/
   generator.py            Jinja2 + Chart.js HTML report
@@ -116,7 +122,7 @@ tests/                    pytest
 
 ## Code conventions
 
-**Python 3.13 exactly** (`requires-python = ">=3.13,<3.14"` — `voyageai` and `irrCAC` gate 3.14). Use modern syntax: `list[str]` not `List[str]`, `X | None` not `Optional[X]`, `match` statements where clear.
+**Python 3.13 exactly** (`requires-python = ">=3.13,<3.14"`). Use modern syntax: `list[str]` not `List[str]`, `X | None` not `Optional[X]`, `match` statements where clear.
 
 **Type hints everywhere.** Including internal functions. Run `mypy lucid/ --strict` cleanly before committing.
 
