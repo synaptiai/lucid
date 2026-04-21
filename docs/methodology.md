@@ -102,27 +102,21 @@ Quote: "Token counting and message creation have separate and independent rate l
 
 ## 6. SpiralBench labeled-data availability
 
-**Source:** <https://github.com/sam-paech/spiral-bench> (inspected 2026-04-21).
+**Source:** <https://github.com/sam-paech/spiral-bench> (inspected 2026-04-21, re-verified 2026-04-22 for Phase 6B pivot).
 
 **Repo structure:**
 
-- `chatlogs/` — raw conversation transcripts (format unverified; not inspected individually).
-- `data/` — rubric definitions: `rubric_criteria.txt` (v0.1, v0.2, v1.1, v1.2), `rubric_prompt.txt`, `scoring_weights.json` (same versions).
-- `res_v1.2/` — judge-model scoring outputs per target model: `claude-sonnet-4.5.json`, `claude-sonnet-4.json`, `gpt-5.2.json`, etc. These are **LLM-as-judge scores**, not human labels.
-- `res_v1.1/`, `res_v0.2/` — prior-version judge outputs.
-- `inter-rater-correlation.ipynb` — notebook; suggests rater correlation analysis exists but requires clone-and-inspect to confirm whether it contains human labels.
-- `prompts/` — scenario prompts used during benchmark runs.
-- `user_instructions/` — role-playing instructions for the simulated "vulnerable user" side of conversations.
-- License: MIT.
+- `chatlogs/` — raw conversation transcripts as HTML renders per target model.
+- `data/rubric_criteria_v1.2.txt` + `rubric_prompt.txt` + `scoring_weights_v1.2.json` — the v1.2 rubric of 17 behaviors with id list, judge prompt template, and per-behavior weight multipliers. License: MIT.
+- `res_v1.2/<target-model>.json` — full judge outputs for 25 target models. Shape: `{"1": {"eval_prompts_v0.2.json": {<scenario-id>: [<conv>], ...}, "__meta__": {"judges": [3 models], ...}}}`. Each conversation has `transcript` (list of role/content dicts) + `judgements` (list of 3, one per judge). Each judge's entry is a dict keyed by `chunk<i>` where `i` is zero-based over assistant turns, value is `{"metrics": {behavior: count}, "full_metrics": {behavior: [[snippet, intensity], ...]}, "assistant_turn_indexes": [int], ...}`. Three judges: Claude Sonnet 4.5, GPT-5, Kimi K2.
+- `inter-rater-correlation.ipynb` — notebook. On inspection: measures **model-ranking Spearman correlation** across judges (do the 3 judges rank the 18 target models the same way?), not per-item IAA. Result: Pearson r ≥ 0.98 across judges at the model-ranking level. Does **not** ship per-item human labels.
+- `prompts/`, `user_instructions/` — scenario prompts + simulated-user role-play instructions.
 
-**Finding: no publicly downloadable hand-labeled conversation data.** SpiralBench generates behavior scores via an LLM judge against a rubric; human labels (if they exist) would be in the inter-rater notebook or a subdirectory not surfaced in the root listing.
+**Phase 6B pivot (2026-04-22):**
 
-**Implication for Lucid Module A calibration (Phase 6):**
+Hand-labeling ≥ 200 turns across 17 behaviors × 3 intensities is ~3,400 per-cell decisions. At a realistic verification rate of 10 seconds per cell even with pre-populated labels, that is **≥ 10 hours** of focused human work — not feasible for a solo-dev hackathon. The plan v3 "3–5h Day 1 evening + 3h Day 2 AM" underestimated this by conflating per-turn with per-cell.
 
-- SpiralBench's judge outputs in `res_v1.2/` can serve as **weak supervision** (a second automated rater), not ground truth.
-- Hand-labeling of ≥ 200 turns is required for Module A calibration targets (Krippendorff's α ≥ 0.67, Gwet's AC1 ≥ 0.70, lower-CI(α) ≥ 0.60).
-- Budget remains per plan: ~3–5 hours Day 1 evening (Tue 2026-04-21 PM) + ~3 hours Day 2 AM (Wed 2026-04-22) for 200+ turns.
-- If `inter-rater-correlation.ipynb` does contain hand labels on inspection, use them as held-out validation split and reduce hand-labeling burden accordingly.
+**Revised calibration methodology:** see §10 below. In short — use SpiralBench's three existing judges as ratings 1/2/3, Module A (Opus 4.7) as rating 4, add three Ollama-backed judges (Kimi K2.6, Gemma 4 31B, GLM 5.1) for ensemble diversity at near-zero API cost, and resolve disagreements via a targeted human audit of ~50 items (~45 minutes). SpiralBench's judgements stop being "weak supervision we ignore" and become **one of several raters in a multi-rater IAA**, which is what α/AC1 are designed to measure.
 
 ## 7. Opus 4.7 breaking changes (API shape)
 
@@ -175,12 +169,96 @@ to resolve under Python 3.13.13 via `uv 0.11.7`.
 
 ## 8. Outstanding verifications (to do before the relevant phase)
 
-- [ ] Clone SpiralBench repo and inspect `inter-rater-correlation.ipynb` for human labels (before Phase 6 Module A calibration).
-- [ ] Confirm Anthropic SDK v0.96.0 `messages.parse(output_format=...)` signature against release notes (before Phase 6 Module A implementation).
-- [ ] Confirm `client.beta.agents.create` / `environments.create` / `sessions.create` / `events.stream` method names and shapes against SDK v0.96.0 source (before Phase 5 thin slice).
-- [x] Fix `CLAUDE.md` temperature guidance: Opus 4.7 rejects non-default `temperature` — adaptive thinking + effort replaces temperature for determinism-style control. (Done in Phase 0 commit 2026-04-21: LLM usage conventions section + prompt-frontmatter convention both updated.)
-- [ ] Update BUILD_GUIDE §5 `ANTHROPIC_DEFAULT_MODEL_TIMELINE` constant with the confirmed dates in §5 above (to do in Phase 2 when schemas take shape, or Phase 9 when Module G ships — whichever comes first).
+- [x] Clone SpiralBench repo and inspect `inter-rater-correlation.ipynb` for human labels (done 2026-04-22 during Phase 6B investigation; notebook measures model-ranking Spearman correlation across the 3 LLM judges, **does not** contain per-item human labels — see §6).
+- [x] Confirm Anthropic SDK v0.96.0 `messages.parse(output_format=...)` signature against release notes (confirmed during Phase 6A Module A implementation).
+- [x] Confirm `client.beta.agents.create` / `environments.create` / `sessions.create` / `events.stream` method names and shapes against SDK v0.96.0 source (confirmed during Phase 5B live-transport run).
+- [x] Fix `CLAUDE.md` temperature guidance: Opus 4.7 rejects non-default `temperature` — adaptive thinking + effort replaces temperature for determinism-style control. (Done in Phase 0 commit 2026-04-21.)
+- [ ] Update BUILD_GUIDE §5 `ANTHROPIC_DEFAULT_MODEL_TIMELINE` constant with the confirmed dates in §5 above. Interim: Module G uses the §5 timeline directly (see `lucid/modules/module_g_attribution.py`). Folded into Phase 9 BUILD_GUIDE reconciliation.
+
+## 10. Phase 6B calibration methodology (synthetic gold + cross-judge IAA + human audit)
+
+**Decision date:** 2026-04-22. Supersedes plan v3's "200+ hand-labeled turns" approach.
+
+**Motivation:** see §6 "Phase 6B pivot". Hand-labeling 17 behaviors × 3 intensities × 200 turns ≈ 3,400 per-cell decisions at 10s each is not feasible in the remaining hackathon window.
+
+### Raters
+
+| Rater | Source | API | Cost |
+|---|---|---|---|
+| Module A (Lucid) | Opus 4.7, rubric v1, chunk_size ∈ {10, 2} | Anthropic | pay-per-call |
+| SB-Sonnet | Claude Sonnet 4.5, SpiralBench v1.2 judge | already-recorded | $0 |
+| SB-GPT5 | GPT-5, SpiralBench v1.2 judge | already-recorded | $0 |
+| SB-Kimi | Kimi K2, SpiralBench v1.2 judge | already-recorded | $0 |
+| Ollama-Kimi26 | Kimi K2.6 via `ollama run kimi-k2.6:cloud` | Ollama cloud | $0 API (sub-based) |
+| Ollama-Gemma4 | Gemma 4 31B via Ollama cloud | Ollama cloud | $0 API |
+| Ollama-GLM51 | GLM 5.1 via Ollama cloud | Ollama cloud | $0 API |
+
+Net: up to **7 independent raters** on the same conversations.
+
+### Corpora
+
+| Corpus | Source | Chunks | Ground truth |
+|---|---|---|---|
+| `spiralbench` | 3 target models × 30 SpiralBench conversations = 90 conversations, ~1,660 chunks total | LLM-to-LLM (no external ground truth) | cross-judge IAA only |
+| `synthetic` | 60 hand-curated turns (17 behaviors × 3 intensities presence + 9 clean) committed to repo at `lucid/calibration/corpus/synthetic_v1.jsonl` | ✅ by construction — sidecar labels | synthetic gold (validated by a spot-check human pass over ~15 items) |
+
+### Cost model (worst-case, Opus 4.7, cache hit 0.85)
+
+- `chunk_size=10` on 3 target models (30 convos each): ~332 calls × ~$0.031 = **$10.33**
+- `chunk_size=2` on 3 target models (30 convos each): ~1,662 calls × ~$0.022 = **$35.92**
+- Both runs + synthetic corpus Module A pass: **~$47**
+
+Cost gate: **$50 for calibration runs** (explicit opt-in via `--yes-i-authorize-spend-up-to 50`). The standard audit gate (`COST_GATE_USD = 20`) stays at $20 because calibration is a separate code path.
+
+### Metrics reported (per behavior + aggregated)
+
+- **Krippendorff's α** — multi-rater, nominal level for presence, ordinal for intensity. Library: `krippendorff==0.8.2`.
+- **Gwet's AC1** — multi-rater, paradox-robust on skewed (rare-behavior) prevalence. Hand-rolled per Gwet 2014 Eqn 2.4 (see §9).
+- **Pairwise Cohen's κ** — Module A vs. each of the other 6 raters. 6 numbers per behavior.
+- **Quadratic-weighted κ** — Module A vs. each other rater, on intensity only. 6 numbers per behavior.
+- **95% BCa bootstrap CI** on all of the above (resample items with replacement, n=2000).
+
+**Primary metric selection** (from plan §6): if ≥ 3 behaviors have prevalence < 10% in the test set, **Gwet AC1** is primary; else **Krippendorff α**. Both always reported.
+
+**Pass gates** (from plan §6): α ≥ 0.67 AND AC1 ≥ 0.70 AND lower-CI(α) ≥ 0.60 → ship v1 of the prompt. One metric passes → iterate v2. Both < 0.55 → descope to 5–7 high-prevalence behaviors.
+
+### Human audit step
+
+After the first IAA pass, the system exports the top 50 disagreements to a reviewer JSONL. Ranking heuristic: `score = cross_judge_entropy × rare_behavior_bonus`, where `entropy` is Shannon entropy across the rater columns for that (turn, behavior) cell (so a 4-yes/3-no split ranks above a 7-yes/0-no), and `rare_behavior_bonus = 1.5` if the behavior's overall prevalence is < 10%, else 1.0.
+
+Human reviewer opens the JSONL, fills in `verified_by_human: "present"|"absent"` (plus intensity 1-3 when present). Target: **~1 minute per item**, ~45 minutes total.
+
+The reviewed JSONL is re-imported; on the audited (turn, behavior) cells, the human label overrides the rater ensemble. IAA is recomputed. The report flags which cells are human-verified vs. LLM-only so the provenance is explicit.
+
+### What this methodology does NOT claim
+
+- It does **not** claim Module A's IAA transfers to your personal Claude.ai export. SpiralBench conversations are adversarial benchmark data, not personal chat logs. Transfer is a separate question and not in hackathon scope.
+- Cross-judge IAA is a weaker ground-truth anchor than unanimous human labels would be. Specifically, if all judges (including Module A) share a systematic bias, IAA is still high. Mitigation: the synthetic gold corpus catches obvious failure modes that would be invisible in pure cross-judge numbers.
+- The 45-minute human audit covers only ~50 cells out of ~1,700 — a ~3% audit rate. We ranked for informativeness, but unaudited agreements could still harbour shared bias.
+
+Limitations documented explicitly in `docs/calibration.md` alongside the numbers.
+
+### Flow
+
+```
+1. uv run lucid calibrate ingest-spiralbench \
+       --models claude-sonnet-4.5,gpt-5-2025-08-07,kimi-k2-0905
+       (fetches res_v1.2 JSON into .lucid/refs/, gitignored)
+
+2. uv run lucid calibrate run --module a --corpus both \
+       --chunk-sizes 10,2 \
+       --judges module_a,sb_sonnet,sb_gpt5,sb_kimi,ollama_kimi26,ollama_gemma4,ollama_glm51 \
+       --yes-i-authorize-spend-up-to 50
+       # writes calibration-runs/<ts>/{judgements/*.jsonl, report.md, disagreements.jsonl}
+
+3. [human] Review calibration-runs/<ts>/disagreements.jsonl
+       (fill in verified_by_human + intensity per item; ~45 min)
+
+4. uv run lucid calibrate --import-verified calibration-runs/<ts>/disagreements.jsonl \
+       --write-markdown docs/calibration.md
+       # final report with human-audit overrides applied
+```
 
 ---
 
-*Seeded 2026-04-21 during Phase 0. Update in-place as modules ship and as new facts are verified.*
+*Seeded 2026-04-21 during Phase 0. Update in-place as modules ship and as new facts are verified. Phase 6B methodology added 2026-04-22.*

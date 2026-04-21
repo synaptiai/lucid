@@ -469,6 +469,54 @@ Always report both. Per-label binary Cohen's κ always reported. Intensity: per-
 
 ---
 
+### Phase 6A — Scaffolding (shipped 2026-04-21)
+
+Files shipped: `lucid/modules/base.py`, `lucid/modules/module_a_spiralbench.py` (mocked), `lucid/modules/module_g_attribution.py` (deterministic, fully implemented), `lucid/calibration/{data,validate,report}.py`, `lucid/prompts.py`, `prompts/module_a/v1.md` (Spiral-Bench v1.2 rubric, 17 behaviors), `tests/conftest.py` mock_anthropic_client, `tests/test_prompt_injection.py`, `lucid calibrate --module a` CLI wired against pre-computed label JSONL pairs. 89 new tests, 224/224 pass, mypy --strict clean.
+
+Not done in 6A (by design): live LLM run, real calibration numbers, the `docs/calibration.md` artifact.
+
+---
+
+### Phase 6B — Calibration methodology pivot + live run (amended 2026-04-22)
+
+**Why an amendment:** plan v3 assumed ≥ 200 hand-labeled turns at "~3 min per turn" = 10 hours human work. That math conflated per-turn with per-cell — the real workload is 17 behaviors × 3 intensities × 200 turns = ~3,400 per-cell decisions, closer to 10+ hours even with pre-populated labels. Not feasible for a solo-dev hackathon.
+
+**Revised approach** (full details in `docs/methodology.md §10`):
+
+Use **multi-rater cross-judge IAA** as the primary calibration target, with a small synthetic gold corpus for rare-behavior coverage and a ~45-minute human audit on the highest-information disagreements.
+
+**Seven raters:**
+- Module A (Opus 4.7)
+- SpiralBench's 3 judges already recorded in `res_v1.2/*.json`: Claude Sonnet 4.5, GPT-5, Kimi K2
+- 3 Ollama-backed judges: Kimi K2.6, Gemma 4 31B, GLM 5.1 (near-zero API cost)
+
+**Two corpora:**
+- SpiralBench: 3 target models × 30 conversations = ~1,660 assistant-turn chunks. LLM-to-LLM IAA only.
+- Synthetic gold: 60 hand-curated turns, labels by construction, ~15 human-verified.
+
+**Cost gate bumped to $50 for calibration** (standard audit gate stays $20). Both chunk sizes (10 and 2) run on all 3 target models → ~$47 Opus spend.
+
+**Human role** (new minimum):
+1. Run the calibration command (one invocation, ~30 min wall clock including Ollama rate-limits).
+2. Review `calibration-runs/<ts>/disagreements.jsonl` — top 50 cross-judge disagreements ranked by entropy × rare-behavior weight. ~45 min at ~1 min/item.
+3. Re-run with `--import-verified` to apply human overrides. Final numbers land in `docs/calibration.md`.
+
+Total: ~1.5 hours human time. Not 10 hours.
+
+**Files shipped in 6B code-side:**
+
+- `lucid/calibration/spiralbench.py` — fetch + parse `res_v1.2/*.json` → Conversation + Turn + LabeledTurn.
+- `lucid/calibration/synthetic.py` + `lucid/calibration/corpus/synthetic_v1.jsonl` — 60 engineered turns, sidecar gold labels.
+- `lucid/calibration/judges/` — Judge protocol, ModuleA wrapper, SpiralBench-file reader, synthetic-gold reader, Ollama backend.
+- `lucid/calibration/audit.py` — disagreement export + human-verified import.
+- `lucid calibrate` CLI extended with `ingest-spiralbench`, `run`, `--export-disagreements`, `--import-verified` flows.
+
+**Dependency addition:** `ollama>=0.4.0` moved from optional to required (judge is load-bearing for the plan).
+
+**Exit criterion (unchanged from Phase 6 original):** `docs/calibration.md` shows α, AC1, per-label κ, QWK, CI bounds, shipped prompt version. Cache hit rate > 50%. Plus: the report explicitly labels which cells are human-verified vs. LLM-only (provenance transparency).
+
+---
+
 ### Phase 7 — Modules B, C, [D opt-in], E, F (Day 3, full day)
 
 **Goal:** Five remaining LLM-backed modules integrated into orchestrator.
