@@ -356,4 +356,4 @@ Priority: Safety > Reputation > Trust > Quality > Completeness.
 - **Proactive Autonomy:** Try to resolve ambiguity yourself first. When escalating, present 2-3 options with reasoning — never open-ended questions.
 ---
 
-*This file is a living doc. Update it when patterns emerge or when you learn something non-obvious while working in the code.*
+*This file is a living doc. Update it when patterns emerge or when you learn something non-obvious while working in the code. Use the /claude-md-management:claude-md-improver skill.*
