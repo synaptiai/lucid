@@ -1,0 +1,200 @@
+{% extends "base.html.j2" %}
+
+{% block body %}
+<h1>Lucid audit report</h1>
+<p class="muted">
+  Run <code>{{ audit.id }}</code> &middot;
+  Started {{ audit.started_at.isoformat() }}
+  {% if audit.completed_at %} &middot; Completed {{ audit.completed_at.isoformat() }}{% endif %}
+  &middot; Status
+  {% if audit.status == 'partial' or audit.status == 'aborted_pre_spend' %}
+    <span class="status-badge status-incomplete">{{ audit.status }}</span>
+  {% elif audit.status == 'completed' %}
+    <span class="status-badge status-ran">{{ audit.status }}</span>
+  {% else %}
+    <span class="status-badge status-empty">{{ audit.status }}</span>
+  {% endif %}
+</p>
+
+{% if audit.status == 'partial' or audit.status == 'aborted_pre_spend' %}
+<div class="partial-banner">
+  <strong>Partial run.</strong> This audit did not complete every module.
+  Sections below marked <span class="status-badge status-incomplete">incomplete</span>
+  did not produce findings; their absence here does not mean no behaviour was
+  present in those conversations — only that the module did not run to
+  completion.
+  {% if audit.skipped_modules %}
+  Skipped modules: {% for m in audit.skipped_modules %}{{ m.value }}{% if not loop.last %}, {% endif %}{% endfor %}.
+  {% endif %}
+</div>
+{% endif %}
+
+<dl class="meta-grid">
+  <dt>Sources</dt>
+  <dd>{% for s in audit.sources %}{{ s.value }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>
+  <dt>Conversations</dt>
+  <dd>
+    {{ audit.corpus_stats.discovered_conversations }} discovered,
+    {{ audit.corpus_stats.sampled_conversations }} sampled
+  </dd>
+  <dt>Turns</dt>
+  <dd>
+    {{ audit.corpus_stats.discovered_turns }} discovered,
+    {{ audit.corpus_stats.sampled_turns }} sampled
+  </dd>
+  {% if audit.corpus_stats.date_range_start and audit.corpus_stats.date_range_end %}
+  <dt>Date range</dt>
+  <dd>
+    {{ audit.corpus_stats.date_range_start.date().isoformat() }}
+    —
+    {{ audit.corpus_stats.date_range_end.date().isoformat() }}
+  </dd>
+  {% endif %}
+  <dt>Total findings</dt>
+  <dd>{{ total }}</dd>
+  <dt>Schema version</dt>
+  <dd>{{ audit.schema_version }}</dd>
+</dl>
+
+<h2>Sections</h2>
+<ul class="toc-list">
+  {% for section in sections %}
+  <li><a href="#mod-{{ section.module.value }}">{{ section.name }}</a> ({{ section.count }})</li>
+  {% endfor %}
+</ul>
+
+<h2>Time / model attribution</h2>
+{% if model_buckets %}
+<h3>Findings per model</h3>
+<table>
+  <thead><tr><th>Model</th><th class="num">Count</th><th class="num">Avg confidence</th></tr></thead>
+  <tbody>
+  {% for bucket in model_buckets %}
+    <tr>
+      <td><code>{{ bucket.key }}</code></td>
+      <td class="num">{{ bucket.count }}</td>
+      <td class="num">{{ bucket.avg_confidence | conf }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No model-attribution findings. Module G either did not run or found no Claude.ai conversations to attribute.</p>
+{% endif %}
+
+{% if time_buckets %}
+<h3>Conversations per month</h3>
+<table>
+  <thead><tr><th>Month</th><th class="num">Count</th></tr></thead>
+  <tbody>
+  {% for bucket in time_buckets %}
+    <tr>
+      <td>{{ bucket.key }}</td>
+      <td class="num">{{ bucket.count }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% for section in sections %}
+<section id="mod-{{ section.module.value }}">
+  <h2>
+    {{ section.name }}
+    {% if section.status == 'ran' %}
+      <span class="status-badge status-ran">ran</span>
+    {% elif section.status == 'incomplete' %}
+      <span class="status-badge status-incomplete">incomplete</span>
+    {% else %}
+      <span class="status-badge status-empty">no findings</span>
+    {% endif %}
+  </h2>
+  <p class="muted">{{ section.description }}</p>
+
+  {% if section.status == 'incomplete' %}
+  <p class="empty-state">
+    Module did not run to completion in this audit. No findings are included below.
+    Resuming via <code>lucid audit --resume {{ audit.id }}</code> will pick up where this run left off.
+  </p>
+  {% elif section.count == 0 %}
+  <p class="empty-state">
+    Module ran but produced no findings in the sampled corpus. For a behavior-scoring
+    module this is itself an informative outcome — no instances of the 17/9/&hellip;
+    target behaviors were detected on the turns examined.
+  </p>
+  {% else %}
+
+  <h4>Per-behavior summary</h4>
+  <table>
+    <thead>
+      <tr>
+        <th>Behavior</th>
+        <th class="num">Count</th>
+        <th class="num">Mean intensity</th>
+        <th class="num">Mean confidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in section.summary_rows %}
+      <tr>
+        <td><code>{{ row.behavior }}</code></td>
+        <td class="num">{{ row.count }}</td>
+        <td class="num">
+          {% if row.mean_intensity is not none %}{{ "%.2f"|format(row.mean_intensity) }}{% else %}—{% endif %}
+        </td>
+        <td class="num">{{ row.mean_confidence | conf }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h4>Top findings</h4>
+  {% for detail in section.top_details %}
+  <details>
+    <summary>
+      <code>{{ detail.behavior }}</code>
+      {% if detail.intensity %}
+        <span class="intensity-cell intensity-{{ detail.intensity }}">{{ detail.intensity }}</span>
+      {% endif %}
+      &middot; conf {{ detail.confidence | conf }}
+      {% if detail.conversation_id %}&middot; conv <code>{{ detail.conversation_id }}</code>{% endif %}
+    </summary>
+    <div style="margin-top: 0.5rem;">
+      <p class="explanation">{{ detail.explanation }}</p>
+      <div>
+        {# SVG whiskers are safe-by-construction: _svg_whisker never embeds user content. #}
+        {% if detail.confidence_ci %}
+          {{ detail.confidence_ci | svg_whisker | safe }}
+          <span class="muted">
+            95% CI [{{ detail.confidence_ci.lower | conf }}, {{ detail.confidence_ci.upper | conf }}]
+          </span>
+        {% else %}
+          {{ detail.confidence | conf_bar | safe }}
+        {% endif %}
+      </div>
+      {% if detail.quote_user %}
+        <p class="quote-label">User quote</p>
+        <blockquote>{{ detail.quote_user }}</blockquote>
+      {% endif %}
+      {% if detail.quote_assistant %}
+        <p class="quote-label">Assistant quote</p>
+        <blockquote>{{ detail.quote_assistant }}</blockquote>
+      {% endif %}
+      {% if detail.evidence_quotes %}
+        <p class="quote-label">Evidence</p>
+        <ul class="evidence-list">
+          {% for q in detail.evidence_quotes %}<li><blockquote>{{ q }}</blockquote></li>{% endfor %}
+        </ul>
+      {% endif %}
+      <p class="muted">
+        <code>{{ detail.citation }}</code>
+        &middot; detected {{ detail.detected_at.isoformat() }}
+        &middot; finding id <code>{{ detail.id[:12] }}&hellip;</code>
+      </p>
+    </div>
+  </details>
+  {% endfor %}
+  {% endif %}
+</section>
+{% endfor %}
+{% endblock %}
