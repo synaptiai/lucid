@@ -267,6 +267,73 @@ def test_calibrate_write_markdown_persists_report(tmp_path: Path) -> None:
     assert "pushback" in contents
 
 
+def test_calibrate_auto_judge_below_cost_gate_exits_3(tmp_path: Path) -> None:
+    """--auto-judge with insufficient --yes-i-authorize-spend-up-to exits 3."""
+    from lucid.cli import EXIT_COST_GATE
+
+    result = runner.invoke(
+        app,
+        [
+            "calibrate",
+            "--module",
+            "a",
+            "--auto-judge",
+            "--yes-i-authorize-spend-up-to",
+            "10",  # below the $50 minimum
+            "--chunk-sizes",
+            "",  # skip Module A so we don't need an API key
+            "--sb-models",
+            "",
+            "--ollama-models",
+            "",
+        ],
+    )
+    assert result.exit_code == EXIT_COST_GATE
+    assert "50" in result.stdout
+
+
+def test_calibrate_import_verified_without_prior_run_exits_usage(tmp_path: Path) -> None:
+    verified = tmp_path / "review.jsonl"
+    verified.write_text("", encoding="utf-8")
+    missing = tmp_path / "nonexistent"
+
+    result = runner.invoke(
+        app,
+        [
+            "calibrate",
+            "--module",
+            "a",
+            "--import-verified",
+            str(verified),
+            "--output-dir",
+            str(missing),
+        ],
+    )
+    assert result.exit_code == EXIT_USAGE
+
+
+def test_calibrate_mixing_modes_exits_usage(tmp_path: Path) -> None:
+    """Combining Phase 6A flags with --auto-judge is a usage error."""
+    human, judge = _seed_labels(
+        tmp_path, n_items=10, agreement_fraction=1.0, behaviors=("sycophancy",)
+    )
+    result = runner.invoke(
+        app,
+        [
+            "calibrate",
+            "--module",
+            "a",
+            "--human-labels",
+            str(human),
+            "--judge-labels",
+            str(judge),
+            "--auto-judge",
+        ],
+    )
+    assert result.exit_code == EXIT_USAGE
+    assert "exactly one mode" in result.stdout.lower()
+
+
 def test_calibrate_write_markdown_appends_second_run(tmp_path: Path) -> None:
     """Running twice with --write-markdown keeps both reports — useful when
     iterating on prompt versions."""

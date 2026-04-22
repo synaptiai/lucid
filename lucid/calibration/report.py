@@ -135,11 +135,38 @@ def compute_calibration(
     rng_seed = np.random.default_rng(seed)
 
     reports: list[BehaviorReport] = []
+    multi_rater = len(labels_by_rater) != 2
+    too_few_items = len(turn_keys) < 2
     for behavior in behaviors:
         presence = presence_matrix(labels_by_rater, behavior, turn_keys)
         intensity = intensity_matrix(labels_by_rater, behavior, turn_keys)
         n = presence.shape[1]
         prevalence = float(presence.mean())
+
+        if too_few_items:
+            # Bootstrap needs ≥ 2 items. A 1-item held-out (e.g. human
+            # audit touched only 1 cell) yields undefined CIs; NaN rows
+            # honestly encode that instead of fabricating point
+            # estimates.
+            nan_metric = MetricResult(
+                name="insufficient_data",
+                value=float("nan"),
+                ci_low=None,
+                ci_high=None,
+                n_items=n,
+            )
+            reports.append(
+                BehaviorReport(
+                    behavior=behavior,
+                    n_items=n,
+                    prevalence_overall=prevalence,
+                    alpha=nan_metric,
+                    ac1=nan_metric,
+                    kappa=nan_metric,
+                    qwk=nan_metric,
+                )
+            )
+            continue
 
         # Per-child RNG so each metric's bootstrap is independently
         # seeded but the whole call is still reproducible.
@@ -151,12 +178,28 @@ def compute_calibration(
         ac1 = bootstrap_metric(
             presence, gwet_ac1, n_resamples=n_bootstrap, rng=rng_child
         )
-        kappa = bootstrap_metric(
-            presence, cohen_kappa, n_resamples=n_bootstrap, rng=rng_child
-        )
-        qwk = bootstrap_metric(
-            intensity, quadratic_weighted_kappa, n_resamples=n_bootstrap, rng=rng_child
-        )
+        if multi_rater:
+            # Cohen's κ and QWK are pairwise-only; for > 2 raters we
+            # surface a NaN placeholder. Pairwise κ across all (Module A,
+            # other rater) pairs is a future extension.
+            nan = MetricResult(
+                name="cohen_kappa", value=float("nan"), ci_low=None, ci_high=None, n_items=n
+            )
+            kappa = nan
+            qwk = MetricResult(
+                name="quadratic_weighted_kappa",
+                value=float("nan"),
+                ci_low=None,
+                ci_high=None,
+                n_items=n,
+            )
+        else:
+            kappa = bootstrap_metric(
+                presence, cohen_kappa, n_resamples=n_bootstrap, rng=rng_child
+            )
+            qwk = bootstrap_metric(
+                intensity, quadratic_weighted_kappa, n_resamples=n_bootstrap, rng=rng_child
+            )
 
         reports.append(
             BehaviorReport(

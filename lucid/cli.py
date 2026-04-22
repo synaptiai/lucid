@@ -330,6 +330,7 @@ def calibrate(
         CalibrateModule,
         typer.Option("--module", help="Which module to calibrate against ground truth."),
     ],
+    # Phase 6A mode: compare two pre-computed label JSONLs.
     human_labels: Annotated[
         Path | None,
         typer.Option(
@@ -344,11 +345,91 @@ def calibrate(
             help="JSONL of LabeledTurn rows produced by the LLM judge on the same turns.",
         ),
     ] = None,
+    # Phase 6B mode: end-to-end auto-judge pipeline.
+    auto_judge: Annotated[
+        bool,
+        typer.Option(
+            "--auto-judge",
+            help=(
+                "Run the full Phase 6B pipeline: fetch SpiralBench, run Module A + Ollama "
+                "judges, compute IAA, export disagreements for human review. Requires "
+                "--yes-i-authorize-spend-up-to and ANTHROPIC_API_KEY."
+            ),
+        ),
+    ] = False,
+    sb_models: Annotated[
+        str,
+        typer.Option(
+            "--sb-models",
+            help="CSV of SpiralBench target-model filenames (without .json suffix).",
+        ),
+    ] = "claude-sonnet-4.5,gpt-5-2025-08-07,kimi-k2",
+    ollama_models: Annotated[
+        str,
+        typer.Option(
+            "--ollama-models",
+            help="CSV of Ollama model identifiers. Pass empty string to disable Ollama.",
+        ),
+    ] = "kimi-k2.6:cloud,gemma4:31b-cloud,glm-5.1:cloud",
+    chunk_sizes: Annotated[
+        str,
+        typer.Option(
+            "--chunk-sizes",
+            help="CSV of Module A chunk sizes to run (default both 10 and 2).",
+        ),
+    ] = "10,2",
+    conversations_per_sb_model: Annotated[
+        int | None,
+        typer.Option(
+            "--conversations-per-sb-model",
+            help="Cap conversations per SpiralBench target model (None = full 30).",
+        ),
+    ] = None,
+    include_synthetic: Annotated[
+        bool,
+        typer.Option(
+            "--include-synthetic/--no-include-synthetic",
+            help="Include the 60-turn synthetic gold corpus.",
+        ),
+    ] = True,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", help="Base directory for calibration run artifacts."),
+    ] = Path("calibration-runs"),
+    disagreements_top_n: Annotated[
+        int,
+        typer.Option(
+            "--disagreements-top-n",
+            help="Cap on top-N disagreements exported to the reviewer JSONL.",
+        ),
+    ] = 50,
+    yes_authorize_usd: Annotated[
+        int,
+        typer.Option(
+            "--yes-i-authorize-spend-up-to",
+            help=(
+                "Required for --auto-judge. Minimum 50 per methodology.md §10 "
+                "(~$46 projected spend at both chunk sizes)."
+            ),
+        ),
+    ] = 0,
+    # Phase 6B mode: post-audit finalisation.
+    import_verified: Annotated[
+        Path | None,
+        typer.Option(
+            "--import-verified",
+            help=(
+                "Re-run IAA with human-audit overrides from this reviewer JSONL. "
+                "--output-dir must point at the completed --auto-judge run."
+            ),
+        ),
+    ] = None,
+    # Shared knobs.
     test_frac: Annotated[
         float,
         typer.Option(
             "--test-frac",
-            help="Fraction of shared turns held out for reported metrics (rest is training).",
+            help="Fraction of shared turns held out for reported metrics (Phase 6A mode).",
         ),
     ] = 0.3,
     seed: Annotated[
@@ -394,14 +475,54 @@ def calibrate(
         )
         raise typer.Exit(EXIT_USAGE)
 
+    # Three modes, one command. Select based on the flags present.
+    modes_set = sum(
+        [
+            auto_judge,
+            import_verified is not None,
+            human_labels is not None or judge_labels is not None,
+        ]
+    )
+    if modes_set != 1:
+        _CONSOLE.print(
+            "[red]Pick exactly one mode:[/red]\n"
+            "  Phase 6A (compare): --human-labels PATH --judge-labels PATH\n"
+            "  Phase 6B (run):     --auto-judge --yes-i-authorize-spend-up-to 50\n"
+            "  Phase 6B (audit):   --import-verified PATH --output-dir <prev run dir>"
+        )
+        raise typer.Exit(EXIT_USAGE)
+
+    if import_verified is not None:
+        _run_calibrate_import_verified(
+            verified_path=import_verified,
+            output_dir=output_dir,
+            behaviors_csv=behaviors_csv,
+            n_bootstrap=n_bootstrap,
+            seed=seed,
+            write_markdown=write_markdown,
+        )
+        return
+
+    if auto_judge:
+        _run_calibrate_auto_judge(
+            sb_models_csv=sb_models,
+            ollama_models_csv=ollama_models,
+            chunk_sizes_csv=chunk_sizes,
+            conversations_per_sb_model=conversations_per_sb_model,
+            include_synthetic=include_synthetic,
+            output_dir=output_dir,
+            disagreements_top_n=disagreements_top_n,
+            yes_authorize_usd=yes_authorize_usd,
+            behaviors_csv=behaviors_csv,
+            n_bootstrap=n_bootstrap,
+            seed=seed,
+        )
+        return
+
+    # Phase 6A mode
     if human_labels is None or judge_labels is None:
         _CONSOLE.print(
-            "[red]`lucid calibrate --module a` requires "
-            "--human-labels PATH and --judge-labels PATH.[/red]"
-        )
-        _CONSOLE.print(
-            "[dim]Each file is JSONL of LabeledTurn rows "
-            "(see lucid/calibration/data.py for schema).[/dim]"
+            "[red]Phase 6A compare mode requires both --human-labels and --judge-labels.[/red]"
         )
         raise typer.Exit(EXIT_USAGE)
 
@@ -500,6 +621,157 @@ def _run_calibrate_module_a(
                 f.write(existing.rstrip() + "\n\n")
             f.write(render_markdown(report) + "\n")
         _CONSOLE.print(f"[green]Wrote markdown report to[/green] {write_markdown}")
+
+
+def _parse_csv(raw: str) -> tuple[str, ...]:
+    return tuple(s.strip() for s in raw.split(",") if s.strip())
+
+
+def _parse_int_csv(raw: str) -> tuple[int, ...]:
+    return tuple(int(s) for s in _parse_csv(raw))
+
+
+def _run_calibrate_auto_judge(
+    *,
+    sb_models_csv: str,
+    ollama_models_csv: str,
+    chunk_sizes_csv: str,
+    conversations_per_sb_model: int | None,
+    include_synthetic: bool,
+    output_dir: Path,
+    disagreements_top_n: int,
+    yes_authorize_usd: int,
+    behaviors_csv: str | None,
+    n_bootstrap: int,
+    seed: int,
+) -> None:
+    """Phase 6B auto-judge mode — end-to-end calibration pipeline."""
+    import asyncio as _asyncio
+
+    from lucid.calibration.auto_judge import (
+        MINIMUM_COST_GATE_USD,
+        AutoJudgeConfig,
+        run_auto_judge,
+    )
+    from lucid.modules.module_a_spiralbench import BEHAVIORS as MODULE_A_BEHAVIORS
+
+    if yes_authorize_usd < MINIMUM_COST_GATE_USD:
+        _CONSOLE.print(
+            f"[red]--auto-judge requires --yes-i-authorize-spend-up-to "
+            f">= {MINIMUM_COST_GATE_USD} (got {yes_authorize_usd}).[/red]"
+        )
+        _CONSOLE.print(
+            "[dim]See docs/methodology.md §10 — projected spend is ~$46 for "
+            "3 SB targets × 2 chunk sizes on Opus 4.7.[/dim]"
+        )
+        raise typer.Exit(EXIT_COST_GATE)
+
+    client = None
+    if chunk_sizes_csv.strip():
+        client = _anthropic_client_or_exit()
+
+    try:
+        behaviors = (
+            tuple(b.strip() for b in behaviors_csv.split(",") if b.strip())
+            if behaviors_csv
+            else tuple(MODULE_A_BEHAVIORS)
+        )
+        unknown = [b for b in behaviors if b not in MODULE_A_BEHAVIORS]
+        if unknown:
+            _CONSOLE.print(f"[red]Unknown behaviors: {unknown}.[/red]")
+            raise typer.Exit(EXIT_USAGE)
+
+        config = AutoJudgeConfig(
+            sb_target_models=_parse_csv(sb_models_csv),
+            ollama_models=_parse_csv(ollama_models_csv),
+            chunk_sizes=_parse_int_csv(chunk_sizes_csv),
+            include_synthetic=include_synthetic,
+            conversations_per_sb_model=conversations_per_sb_model,
+            behaviors=behaviors,
+            n_bootstrap=n_bootstrap,
+            seed=seed,
+            disagreements_top_n=disagreements_top_n,
+            output_dir=output_dir,
+        )
+    except (ValueError, typer.Exit):
+        raise
+    except Exception as err:
+        _CONSOLE.print(f"[red]Invalid configuration:[/red] {err}")
+        raise typer.Exit(EXIT_USAGE) from err
+
+    try:
+        _asyncio.run(
+            run_auto_judge(
+                config,
+                anthropic_client=client,  # type: ignore[arg-type]
+                yes_authorize_usd=yes_authorize_usd,
+                console=_CONSOLE,
+            )
+        )
+    except ValueError as err:
+        _CONSOLE.print(f"[red]{err}[/red]")
+        raise typer.Exit(EXIT_COST_GATE) from err
+    except RuntimeError as err:
+        _CONSOLE.print(f"[red]auto-judge failed:[/red] {err}")
+        raise typer.Exit(EXIT_USAGE) from err
+
+
+def _run_calibrate_import_verified(
+    *,
+    verified_path: Path,
+    output_dir: Path,
+    behaviors_csv: str | None,
+    n_bootstrap: int,
+    seed: int,
+    write_markdown: Path | None,
+) -> None:
+    """Apply human-audit overrides from a completed reviewer JSONL."""
+    from lucid.calibration.auto_judge import AutoJudgeConfig, import_and_finalize
+    from lucid.modules.module_a_spiralbench import BEHAVIORS as MODULE_A_BEHAVIORS
+
+    if not verified_path.is_file():
+        _CONSOLE.print(f"[red]--import-verified path does not exist:[/red] {verified_path}")
+        raise typer.Exit(EXIT_USAGE)
+
+    # When --output-dir is the top-level base (calibration-runs/), try to
+    # find the most recent auto-* subdirectory.
+    resolved_run_dir = output_dir
+    if (output_dir / "judgements").is_dir():
+        resolved_run_dir = output_dir
+    else:
+        candidates = sorted(output_dir.glob("auto-*") if output_dir.is_dir() else [])
+        if candidates:
+            resolved_run_dir = candidates[-1]
+            _CONSOLE.print(f"[dim]Using most-recent run directory {resolved_run_dir}[/dim]")
+        else:
+            _CONSOLE.print(
+                f"[red]No calibration run artifacts found under {output_dir}.[/red]"
+            )
+            raise typer.Exit(EXIT_USAGE)
+
+    behaviors = (
+        tuple(b.strip() for b in behaviors_csv.split(",") if b.strip())
+        if behaviors_csv
+        else tuple(MODULE_A_BEHAVIORS)
+    )
+
+    config = AutoJudgeConfig(
+        behaviors=behaviors,
+        n_bootstrap=n_bootstrap,
+        seed=seed,
+    )
+
+    try:
+        import_and_finalize(
+            verified_path=verified_path,
+            output_dir=resolved_run_dir,
+            config=config,
+            write_markdown=write_markdown,
+            console=_CONSOLE,
+        )
+    except FileNotFoundError as err:
+        _CONSOLE.print(f"[red]{err}[/red]")
+        raise typer.Exit(EXIT_USAGE) from err
 
 
 # ──────────────────────────────────────────────────────────────────────────
