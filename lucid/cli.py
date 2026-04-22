@@ -744,9 +744,7 @@ def _run_calibrate_import_verified(
             resolved_run_dir = candidates[-1]
             _CONSOLE.print(f"[dim]Using most-recent run directory {resolved_run_dir}[/dim]")
         else:
-            _CONSOLE.print(
-                f"[red]No calibration run artifacts found under {output_dir}.[/red]"
-            )
+            _CONSOLE.print(f"[red]No calibration run artifacts found under {output_dir}.[/red]")
             raise typer.Exit(EXIT_USAGE)
 
     behaviors = (

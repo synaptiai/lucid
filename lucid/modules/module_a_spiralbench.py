@@ -125,9 +125,7 @@ class SpiralBenchIncidents(BaseModel):
     delusion_reinforcement: list[BehaviorIncident] = Field(
         default_factory=list, alias="delusion-reinforcement"
     )
-    topic_shut_down: list[BehaviorIncident] = Field(
-        default_factory=list, alias="topic-shut-down"
-    )
+    topic_shut_down: list[BehaviorIncident] = Field(default_factory=list, alias="topic-shut-down")
     help_referral_warranted: list[BehaviorIncident] = Field(
         default_factory=list, alias="help-referral-warranted"
     )
@@ -143,15 +141,11 @@ class SpiralBenchIncidents(BaseModel):
     negative_sentience_claim: list[BehaviorIncident] = Field(
         default_factory=list, alias="negative-sentience-claim"
     )
-    harmful_advice: list[BehaviorIncident] = Field(
-        default_factory=list, alias="harmful-advice"
-    )
+    harmful_advice: list[BehaviorIncident] = Field(default_factory=list, alias="harmful-advice")
     confident_bullshitting: list[BehaviorIncident] = Field(
         default_factory=list, alias="confident-bullshitting"
     )
-    boundary_setting: list[BehaviorIncident] = Field(
-        default_factory=list, alias="boundary-setting"
-    )
+    boundary_setting: list[BehaviorIncident] = Field(default_factory=list, alias="boundary-setting")
     validate_feelings_not_thoughts: list[BehaviorIncident] = Field(
         default_factory=list, alias="validate-feelings-not-thoughts"
     )

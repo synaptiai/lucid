@@ -274,10 +274,7 @@ def _render_classify_request(inp: _ClassifyInput) -> str:
     top_sim = inp.excerpts[0].similarity if inp.excerpts else 0.0
     excerpt_lines = []
     for i, e in enumerate(inp.excerpts, start=1):
-        header = (
-            f"[EXCERPT {i} score={e.similarity:.2f} "
-            f"conv={e.conversation_id} turn={e.turn_id}]"
-        )
+        header = f"[EXCERPT {i} score={e.similarity:.2f} conv={e.conversation_id} turn={e.turn_id}]"
         excerpt_lines.append(f"{header}\n{_escape_delimiters(e.chunk_text)}")
     excerpts_block = "\n\n".join(excerpt_lines) if excerpt_lines else "(no excerpts)"
     return (
@@ -441,9 +438,7 @@ def _finding_id(
     memory_source: str,
     claim_id: str,
 ) -> str:
-    raw = (
-        f"{audit_run_id}:{MODULE_NAME.value}:{memory_source}:{claim_id}"
-    ).encode()
+    raw = (f"{audit_run_id}:{MODULE_NAME.value}:{memory_source}:{claim_id}").encode()
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -640,9 +635,7 @@ class ModuleHMemory:
             [c.conversation_id for c in chunks],
             model=model,
         )
-        cached_by_id: dict[str, bytes] = {
-            row["id"]: row["vector_blob"] for row in known
-        }
+        cached_by_id: dict[str, bytes] = {row["id"]: row["vector_blob"] for row in known}
 
         to_embed_indices = [i for i, c in enumerate(chunks) if c.chunk_id not in cached_by_id]
         if to_embed_indices:
@@ -664,9 +657,7 @@ class ModuleHMemory:
             # Update the in-memory map with new blobs so the matrix assembly
             # below reads from a single source.
             for local_i, orig_i in enumerate(to_embed_indices):
-                cached_by_id[chunks[orig_i].chunk_id] = vector_to_blob(
-                    result.vectors[local_i]
-                )
+                cached_by_id[chunks[orig_i].chunk_id] = vector_to_blob(result.vectors[local_i])
 
         # Assemble the matrix in chunk order.
         matrix_rows: list[np.ndarray] = []
@@ -790,9 +781,7 @@ class ModuleHMemory:
                 except Exception as exc:
                     # Refine failed — keep the first-pass verdict.
                     sub_claim_details.append(
-                        {
-                            "refine_error": f"{type(exc).__name__}: {str(exc)[:200]}"
-                        }
+                        {"refine_error": f"{type(exc).__name__}: {str(exc)[:200]}"}
                     )
                 else:
                     sub_labels: list[MemorySupport] = []
@@ -804,8 +793,7 @@ class ModuleHMemory:
                                 {
                                     "sub_claim_id": sub.id,
                                     "error": (
-                                        f"sub_retrieve:{type(exc).__name__}: "
-                                        f"{str(exc)[:200]}"
+                                        f"sub_retrieve:{type(exc).__name__}: {str(exc)[:200]}"
                                     ),
                                 }
                             )
@@ -836,8 +824,7 @@ class ModuleHMemory:
                                 {
                                     "sub_claim_id": sub.id,
                                     "error": (
-                                        f"sub_classify:{type(exc).__name__}: "
-                                        f"{str(exc)[:200]}"
+                                        f"sub_classify:{type(exc).__name__}: {str(exc)[:200]}"
                                     ),
                                 }
                             )
@@ -908,9 +895,7 @@ class ModuleHMemory:
     ) -> list[Excerpt]:
         if index.matrix.shape[0] == 0:
             return []
-        query_result = await self._embedder.embed_batch(
-            [query_text], input_type="query"
-        )
+        query_result = await self._embedder.embed_batch([query_text], input_type="query")
         query_vec = query_result.vectors[0]
         sims = cosine_similarity_matrix(
             query_vec,

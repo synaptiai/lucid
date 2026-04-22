@@ -140,9 +140,7 @@ async def test_static_provider_default_covers_missing_keys() -> None:
         mapping={"known": np.ones(STATIC_DIM, dtype=np.float32)},
         default=np.full(STATIC_DIM, 0.5, dtype=np.float32),
     )
-    result = await provider.embed_batch(
-        ["known", "unknown"], input_type="document"
-    )
+    result = await provider.embed_batch(["known", "unknown"], input_type="document")
     assert result.vectors[1].tolist() == [0.5] * STATIC_DIM
 
 
@@ -394,13 +392,23 @@ def test_store_insert_embedding_is_idempotent(tmp_path: Path) -> None:
     vec_a = vector_to_blob(np.array([1.0, 2.0], dtype=np.float32))
     vec_b = vector_to_blob(np.array([9.9, 8.8], dtype=np.float32))
     store.insert_embedding(
-        id=id_, conversation_id="c-1", turn_id="t-0",
-        chunk_text="repeated chunk", vector_blob=vec_a, dim=2, model="m1",
+        id=id_,
+        conversation_id="c-1",
+        turn_id="t-0",
+        chunk_text="repeated chunk",
+        vector_blob=vec_a,
+        dim=2,
+        model="m1",
     )
     # Re-insert with same id but different blob.
     store.insert_embedding(
-        id=id_, conversation_id="c-1", turn_id="t-0",
-        chunk_text="repeated chunk", vector_blob=vec_b, dim=2, model="m1",
+        id=id_,
+        conversation_id="c-1",
+        turn_id="t-0",
+        chunk_text="repeated chunk",
+        vector_blob=vec_b,
+        dim=2,
+        model="m1",
     )
     rows = store.fetch_embeddings_for_conversations(["c-1"])
     assert len(rows) == 1
@@ -428,18 +436,24 @@ def test_store_fetch_embedding_ids_cache_hit(tmp_path: Path) -> None:
 def test_store_fetch_embeddings_filter_by_model(tmp_path: Path) -> None:
     store = _seed_store(tmp_path)
     store.insert_embedding(
-        id=chunk_id("x"), conversation_id="c-1", turn_id="t-0",
-        chunk_text="x", vector_blob=vector_to_blob(np.ones(2, np.float32)),
-        dim=2, model="voyage-3-large",
+        id=chunk_id("x"),
+        conversation_id="c-1",
+        turn_id="t-0",
+        chunk_text="x",
+        vector_blob=vector_to_blob(np.ones(2, np.float32)),
+        dim=2,
+        model="voyage-3-large",
     )
     store.insert_embedding(
-        id=chunk_id("y"), conversation_id="c-1", turn_id="t-0",
-        chunk_text="y", vector_blob=vector_to_blob(np.zeros(2, np.float32)),
-        dim=2, model="static-test",
+        id=chunk_id("y"),
+        conversation_id="c-1",
+        turn_id="t-0",
+        chunk_text="y",
+        vector_blob=vector_to_blob(np.zeros(2, np.float32)),
+        dim=2,
+        model="static-test",
     )
-    voyage_rows = store.fetch_embeddings_for_conversations(
-        ["c-1"], model="voyage-3-large"
-    )
+    voyage_rows = store.fetch_embeddings_for_conversations(["c-1"], model="voyage-3-large")
     assert len(voyage_rows) == 1
     assert voyage_rows[0]["chunk_text"] == "x"
     store.close()

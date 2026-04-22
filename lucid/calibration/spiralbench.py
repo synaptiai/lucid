@@ -311,8 +311,7 @@ def _labeled_turn_from_chunk(
     pos_index = sb_ordinal - 1
     if pos_index < 0 or pos_index >= len(assistant_positions):
         log.warning(
-            "sb: chunk assistant_turn_indexes=%s maps outside the "
-            "%d assistant turns in %s",
+            "sb: chunk assistant_turn_indexes=%s maps outside the %d assistant turns in %s",
             assistant_indexes,
             len(assistant_positions),
             conversation_id,
@@ -449,9 +448,7 @@ def parse_spiralbench_file(
         conversations.append(conversation)
         turns_by_conv[conversation.id] = turns
 
-        assistant_positions = [
-            i for i, t in enumerate(turns) if t.role == Role.ASSISTANT
-        ]
+        assistant_positions = [i for i, t in enumerate(turns) if t.role == Role.ASSISTANT]
         judgements = record.get("judgements") or []
         for j_idx, judge_chunks in enumerate(judgements):
             if j_idx >= len(JUDGE_RATER_NAMES):

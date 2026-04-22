@@ -82,9 +82,7 @@ class LabeledTurn(BaseModel):
                     f"intensity for {behavior!r} but behavior not in present_behaviors"
                 )
             if not 1 <= value <= 3:
-                raise ValueError(
-                    f"intensity for {behavior!r} out of range: {value} (expected 1-3)"
-                )
+                raise ValueError(f"intensity for {behavior!r} out of range: {value} (expected 1-3)")
         return self
 
 
@@ -130,8 +128,7 @@ def _row_per_rater(
         for j, key in enumerate(turn_order):
             if key not in lookup:
                 raise ValueError(
-                    f"Rater {rater!r} has no label for turn {key}; "
-                    "IAA requires complete ratings"
+                    f"Rater {rater!r} has no label for turn {key}; IAA requires complete ratings"
                 )
             matrix[i, j] = int(value_fn(lookup[key]))
     return matrix

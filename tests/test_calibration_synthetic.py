@@ -23,9 +23,7 @@ from lucid.schemas import Role
 def test_corpus_covers_all_17_behaviors_at_all_3_intensities() -> None:
     """Full cross-grid: every (behavior, intensity) combination is represented."""
     observed = {
-        (ex.behavior, ex.intensity)
-        for ex in SYNTHETIC_CORPUS_V1
-        if ex.behavior is not None
+        (ex.behavior, ex.intensity) for ex in SYNTHETIC_CORPUS_V1 if ex.behavior is not None
     }
     expected = {(b, i) for b in BEHAVIORS for i in (1, 2, 3)}
     missing = expected - observed

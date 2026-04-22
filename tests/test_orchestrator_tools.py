@@ -203,12 +203,8 @@ async def test_invoke_module_h_with_provider_but_no_client_returns_no_client(
     from lucid.modules.embeddings import STATIC_DIM, StaticEmbeddingProvider
 
     store, run_id = _seed_store(tmp_path)
-    provider = StaticEmbeddingProvider(
-        default=np.zeros(STATIC_DIM, dtype=np.float32)
-    )
-    registry = build_tool_registry(
-        store=store, audit_run_id=run_id, embedding_provider=provider
-    )
+    provider = StaticEmbeddingProvider(default=np.zeros(STATIC_DIM, dtype=np.float32))
+    registry = build_tool_registry(store=store, audit_run_id=run_id, embedding_provider=provider)
     result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
         {"module": "H", "conversation_ids": ["c-1"]}
     )
@@ -259,9 +255,7 @@ async def test_invoke_module_d_with_opt_in_still_skipped_without_client(
     """allow_module_d=True unlocks the opt-in gate, but Module D still
     needs a client; without it the dispatcher returns ``no_client``."""
     store, run_id = _seed_store(tmp_path)
-    registry = build_tool_registry(
-        store=store, audit_run_id=run_id, allow_module_d=True
-    )
+    registry = build_tool_registry(store=store, audit_run_id=run_id, allow_module_d=True)
     result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
         {"module": "D", "conversation_ids": ["c-1"]}
     )
@@ -318,9 +312,7 @@ async def test_invoke_module_a_end_to_end_with_mocked_client(tmp_path: Path) -> 
     score = SpiralBenchScore(
         reasoning="found one pushback incident",
         incidents=SpiralBenchIncidents(
-            pushback=[
-                BehaviorIncident(snippet="let me push back", intensity=2, turn_index=0)
-            ]
+            pushback=[BehaviorIncident(snippet="let me push back", intensity=2, turn_index=0)]
         ),
     )
 
@@ -342,9 +334,7 @@ async def test_invoke_module_a_end_to_end_with_mocked_client(tmp_path: Path) -> 
     client.messages = MagicMock()
     client.messages.create = AsyncMock(side_effect=_call)
 
-    registry = build_tool_registry(
-        store=store, audit_run_id=run_id, anthropic_client=client
-    )
+    registry = build_tool_registry(store=store, audit_run_id=run_id, anthropic_client=client)
     result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
         {"module": "A", "conversation_ids": ["c-1"]}
     )

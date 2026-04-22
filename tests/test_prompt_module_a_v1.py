@@ -73,7 +73,9 @@ def _parse_prompt_file(path: Path) -> tuple[dict[str, str], str]:
         key, _, val = line.partition(":")
         key = key.strip()
         val = val.strip()
-        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+        if (val.startswith('"') and val.endswith('"')) or (
+            val.startswith("'") and val.endswith("'")
+        ):
             val = val[1:-1]
         fm[key] = val
     return fm, body

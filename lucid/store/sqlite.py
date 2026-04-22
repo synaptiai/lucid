@@ -254,9 +254,7 @@ class CorpusStore:
         out: list[MemoryFile] = []
         for row in rows:
             project_memories = (
-                orjson.loads(row["project_memories_json"])
-                if row["project_memories_json"]
-                else {}
+                orjson.loads(row["project_memories_json"]) if row["project_memories_json"] else {}
             )
             out.append(
                 MemoryFile(

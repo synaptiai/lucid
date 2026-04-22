@@ -175,9 +175,7 @@ def compute_calibration(
         alpha = bootstrap_metric(
             presence, _krippendorff_stat, n_resamples=n_bootstrap, rng=rng_child
         )
-        ac1 = bootstrap_metric(
-            presence, gwet_ac1, n_resamples=n_bootstrap, rng=rng_child
-        )
+        ac1 = bootstrap_metric(presence, gwet_ac1, n_resamples=n_bootstrap, rng=rng_child)
         if multi_rater:
             # Cohen's κ and QWK are pairwise-only; for > 2 raters we
             # surface a NaN placeholder. Pairwise κ across all (Module A,
@@ -194,9 +192,7 @@ def compute_calibration(
                 n_items=n,
             )
         else:
-            kappa = bootstrap_metric(
-                presence, cohen_kappa, n_resamples=n_bootstrap, rng=rng_child
-            )
+            kappa = bootstrap_metric(presence, cohen_kappa, n_resamples=n_bootstrap, rng=rng_child)
             qwk = bootstrap_metric(
                 intensity, quadratic_weighted_kappa, n_resamples=n_bootstrap, rng=rng_child
             )

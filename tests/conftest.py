@@ -69,15 +69,12 @@ def mock_anthropic_client() -> Callable[..., MagicMock]:
     ) -> MagicMock:
         usage_payload = usage or _default_usage()
 
-        responses = [
-            _make_response(output, usage_payload) for output in parse_outputs
-        ]
+        responses = [_make_response(output, usage_payload) for output in parse_outputs]
 
         async def _call(**_kwargs: object) -> Any:
             if not responses:
                 raise IndexError(
-                    "mock_anthropic_client: messages call made but no "
-                    "parse_outputs remain"
+                    "mock_anthropic_client: messages call made but no parse_outputs remain"
                 )
             return responses.pop(0)
 

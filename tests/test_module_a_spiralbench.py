@@ -366,10 +366,7 @@ def test_module_loads_v1_prompt_and_propagates_hash_to_findings(
 def test_behaviors_constant_matches_rubric_cardinality() -> None:
     assert len(BEHAVIORS) == 17
     # All behavior ids appear as aliases/names on the incidents model.
-    aliases = {
-        (info.alias or name)
-        for name, info in SpiralBenchIncidents.model_fields.items()
-    }
+    aliases = {(info.alias or name) for name, info in SpiralBenchIncidents.model_fields.items()}
     assert set(BEHAVIORS) == aliases
 
 

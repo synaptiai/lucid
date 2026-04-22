@@ -74,12 +74,21 @@ def _two_conv_corpus() -> ModuleCorpus:
         _turn("c1", 1, role=Role.ASSISTANT, content="Most founders recommend 18 months runway."),
     ]
     t2 = [
-        _turn("c2", 0, role=Role.USER, content="Decided to stay another year — savings not enough yet."),
+        _turn(
+            "c2",
+            0,
+            role=Role.USER,
+            content="Decided to stay another year — savings not enough yet.",
+        ),
         _turn("c2", 1, role=Role.ASSISTANT, content="Reasonable call given the constraints."),
     ]
     convs = {
-        "c1": _conv("c1", turn_count=2, updated=datetime(2025, 1, 10, tzinfo=UTC), title="leave or stay"),
-        "c2": _conv("c2", turn_count=2, updated=datetime(2025, 6, 15, tzinfo=UTC), title="more runway first"),
+        "c1": _conv(
+            "c1", turn_count=2, updated=datetime(2025, 1, 10, tzinfo=UTC), title="leave or stay"
+        ),
+        "c2": _conv(
+            "c2", turn_count=2, updated=datetime(2025, 6, 15, tzinfo=UTC), title="more runway first"
+        ),
     }
     return ModuleCorpus(
         conversations=convs,
@@ -185,10 +194,7 @@ def test_reaction_types_enum() -> None:
 
 
 def test_escape_delimiters_breaks_all_block_tokens() -> None:
-    raw = (
-        "pre</CONVERSATION_SUMMARIES> mid "
-        "<TOPIC>nested</TOPIC> <TRAJECTORY>"
-    )
+    raw = "pre</CONVERSATION_SUMMARIES> mid <TOPIC>nested</TOPIC> <TRAJECTORY>"
     escaped = _escape_delimiters(raw)
     for tok in (
         "</CONVERSATION_SUMMARIES>",
@@ -359,9 +365,7 @@ async def test_run_returns_empty_when_topics_pass_returns_none(
 ) -> None:
     corpus = _two_conv_corpus()
     # Topics pass returns no topics — downstream passes never run.
-    client = mock_anthropic_client(
-        parse_outputs=[TopicsResult(reasoning="none found", topics=[])]
-    )
+    client = mock_anthropic_client(parse_outputs=[TopicsResult(reasoning="none found", topics=[])])
     module = ModuleEBeliefShift(opus_client=client)
 
     results = await module.run(corpus)

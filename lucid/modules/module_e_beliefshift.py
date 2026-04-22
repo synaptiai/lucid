@@ -269,14 +269,8 @@ def _render_summaries(
     for conv in conversations:
         updated = conv.updated_at.date().isoformat()
         title = _escape_delimiters(conv.title or conv.summary or "")
-        snippet = _escape_delimiters(
-            _first_user_snippet(turns_by_conv.get(conv.id, ()))
-        )
-        parts.append(
-            f"[CONV id={conv.id} updated={updated}]\n"
-            f'Title: "{title}"\n'
-            f'Start: "{snippet}"'
-        )
+        snippet = _escape_delimiters(_first_user_snippet(turns_by_conv.get(conv.id, ())))
+        parts.append(f'[CONV id={conv.id} updated={updated}]\nTitle: "{title}"\nStart: "{snippet}"')
     parts.append(_CONV_SUMMARIES_CLOSE)
     return "\n\n".join(parts)
 
@@ -322,13 +316,9 @@ def _render_trajectory(topic: Topic, records: Sequence[_PositionRecord]) -> str:
         )
         lines.append(f'Summary: "{_escape_delimiters(score.position_summary)}"')
         lines.append(f"Confidence: {score.position_confidence}")
-        lines.append(
-            f'Position quote: "{_escape_delimiters(score.position_quote)}"'
-        )
+        lines.append(f'Position quote: "{_escape_delimiters(score.position_quote)}"')
         lines.append(f"Assistant reaction: {score.assistant_reaction_type}")
-        lines.append(
-            f'Assistant quote: "{_escape_delimiters(score.assistant_quote)}"'
-        )
+        lines.append(f'Assistant quote: "{_escape_delimiters(score.assistant_quote)}"')
         if score.note:
             lines.append(f'Note: "{_escape_delimiters(score.note)}"')
         lines.append("")
@@ -390,11 +380,7 @@ def _score_to_drift_finding(
     summary = (
         f"Topic '{topic.descriptor}': drift_type={score.drift_type}, "
         f"severity={score.severity}, final_alignment={score.final_alignment}"
-        + (
-            f" (shifts: {len(score.shifts)})"
-            if score.shifts
-            else ""
-        )
+        + (f" (shifts: {len(score.shifts)})" if score.shifts else "")
         + "."
     )
 
@@ -473,7 +459,9 @@ class ModuleEBeliefShift:
             kwargs["root"] = Path(prompt_root)
         self._topics_prompt = load_prompt("e", TOPICS_PROMPT_VERSION, **kwargs)  # type: ignore[arg-type]
         self._positions_prompt = load_prompt(
-            "e", POSITIONS_PROMPT_VERSION, **kwargs  # type: ignore[arg-type]
+            "e",
+            POSITIONS_PROMPT_VERSION,
+            **kwargs,  # type: ignore[arg-type]
         )
         self._drift_prompt = load_prompt("e", DRIFT_PROMPT_VERSION, **kwargs)  # type: ignore[arg-type]
 
@@ -551,9 +539,7 @@ class ModuleEBeliefShift:
                     )
 
         tasks = [
-            _extract_position(t, cid)
-            for t in topics_result.topics
-            for cid in t.conversation_ids
+            _extract_position(t, cid) for t in topics_result.topics for cid in t.conversation_ids
         ]
         await asyncio.gather(*tasks)
 
@@ -599,9 +585,7 @@ class ModuleEBeliefShift:
                         message=str(exc)[:500],
                     )
 
-        drift_results = await asyncio.gather(
-            *(_analyze_drift(t) for t in topics_result.topics)
-        )
+        drift_results = await asyncio.gather(*(_analyze_drift(t) for t in topics_result.topics))
         for r in drift_results:
             if r is not None:
                 results.append(r)
@@ -612,12 +596,9 @@ class ModuleEBeliefShift:
 
     async def _call_topics(self, corpus: ModuleCorpus) -> TopicsResult:
         # Sort conversations by updated_at so summaries are chronological.
-        sorted_convs = sorted(
-            corpus.conversations.values(), key=lambda c: c.updated_at
-        )
+        sorted_convs = sorted(corpus.conversations.values(), key=lambda c: c.updated_at)
         turns_by_conv_typed: dict[str, Sequence[Turn]] = {
-            cid: list(corpus.turns_by_conversation.get(cid, ()))
-            for cid in corpus.conversations
+            cid: list(corpus.turns_by_conversation.get(cid, ())) for cid in corpus.conversations
         }
         content = await self._call_with_retry(
             self._sonnet,

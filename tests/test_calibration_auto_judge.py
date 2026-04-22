@@ -117,9 +117,7 @@ def sb_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     cache = tmp_path / "sb_cache"
     cache.mkdir()
     (cache / "test-target.json").write_bytes(_mini_sb_json_bytes())
-    monkeypatch.setattr(
-        "lucid.calibration.spiralbench.DEFAULT_CACHE_DIR", cache
-    )
+    monkeypatch.setattr("lucid.calibration.spiralbench.DEFAULT_CACHE_DIR", cache)
     monkeypatch.setattr(
         "lucid.calibration.auto_judge.fetch_spiralbench_model",
         lambda target: cache / f"{target}.json",
@@ -309,9 +307,7 @@ async def test_in_memory_synthetic_gold_judge_filters_to_corpus() -> None:
 # ──────────────────────────────────────────────────────────────────────────
 
 
-async def test_run_auto_judge_end_to_end_writes_artifacts(
-    sb_cache: Path, tmp_path: Path
-) -> None:
+async def test_run_auto_judge_end_to_end_writes_artifacts(sb_cache: Path, tmp_path: Path) -> None:
     """End-to-end over SpiralBench only (no synthetic; disjoint coverage
     would break IAA). 3 SB raters on the same 1-conv fixture → shared
     cells exist → full pipeline runs."""
@@ -387,9 +383,7 @@ async def test_run_auto_judge_raises_when_no_judges_produce_labels(
 # ──────────────────────────────────────────────────────────────────────────
 
 
-async def test_import_and_finalize_applies_human_overrides(
-    sb_cache: Path, tmp_path: Path
-) -> None:
+async def test_import_and_finalize_applies_human_overrides(sb_cache: Path, tmp_path: Path) -> None:
     # First: run the pipeline so judgement JSONLs exist. SB-only corpus
     # so raters have overlapping cells.
     config = AutoJudgeConfig(

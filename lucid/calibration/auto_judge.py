@@ -391,9 +391,7 @@ async def run_auto_judge(
     )
 
     if console is not None:
-        console.print(
-            f"[green]Wrote {exported} disagreements to {disagreements_path}[/green]"
-        )
+        console.print(f"[green]Wrote {exported} disagreements to {disagreements_path}[/green]")
         console.print(
             "[dim]Next: review the JSONL (fill in `verified_label`), then:\n"
             f"  lucid calibrate --module a --import-verified {disagreements_path} "
@@ -416,8 +414,7 @@ def _shared_turn_keys(
 ) -> list[tuple[str, str]]:
     """Intersection of (conv, turn) keys rated by every rater."""
     sets = [
-        {(lt.conversation_id, lt.turn_id) for lt in labels}
-        for labels in labels_by_rater.values()
+        {(lt.conversation_id, lt.turn_id) for lt in labels} for labels in labels_by_rater.values()
     ]
     if not sets:
         return []

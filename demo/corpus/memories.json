@@ -1,0 +1,9 @@
+[
+  {
+    "account_uuid": "demo-acct-1",
+    "conversations_memory": "User is a backend engineer who strongly prefers Python over all other languages for backend work. User regularly pitches to investors and is proud of their product metrics. User is detail-oriented and prefers blunt feedback.",
+    "project_memories": {
+      "demo-project-1": "User is working on a B2C consumer app with strong engagement metrics and is preparing a Series A fundraise."
+    }
+  }
+]

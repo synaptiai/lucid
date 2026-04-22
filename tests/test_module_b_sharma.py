@@ -255,8 +255,12 @@ def test_pair_exchanges_matches_opposite_sentiment_by_jaccard() -> None:
 
 def test_pair_exchanges_returns_empty_without_opposite_sentiments() -> None:
     exchanges = [
-        _exchange(conv_id="c1", u_idx=0, a_idx=1, content_summary="same same", sentiment="positive"),
-        _exchange(conv_id="c2", u_idx=0, a_idx=1, content_summary="same same", sentiment="positive"),
+        _exchange(
+            conv_id="c1", u_idx=0, a_idx=1, content_summary="same same", sentiment="positive"
+        ),
+        _exchange(
+            conv_id="c2", u_idx=0, a_idx=1, content_summary="same same", sentiment="positive"
+        ),
     ]
     assert _pair_exchanges(exchanges, min_jaccard=0.3) == []
 
@@ -265,9 +269,27 @@ def test_pair_exchanges_greedy_one_pair_per_exchange() -> None:
     """If one positive has high overlap with two negatives, it should match
     exactly one — the highest-scoring — and the other negative goes unpaired."""
     exchanges = [
-        _exchange(conv_id="p1", u_idx=0, a_idx=1, content_summary="react websocket cleanup hook", sentiment="positive"),
-        _exchange(conv_id="n1", u_idx=0, a_idx=1, content_summary="react websocket cleanup hook pattern", sentiment="negative"),
-        _exchange(conv_id="n2", u_idx=0, a_idx=1, content_summary="react websocket hook", sentiment="negative"),
+        _exchange(
+            conv_id="p1",
+            u_idx=0,
+            a_idx=1,
+            content_summary="react websocket cleanup hook",
+            sentiment="positive",
+        ),
+        _exchange(
+            conv_id="n1",
+            u_idx=0,
+            a_idx=1,
+            content_summary="react websocket cleanup hook pattern",
+            sentiment="negative",
+        ),
+        _exchange(
+            conv_id="n2",
+            u_idx=0,
+            a_idx=1,
+            content_summary="react websocket hook",
+            sentiment="negative",
+        ),
     ]
     pairs = _pair_exchanges(exchanges, min_jaccard=0.2)
     assert len(pairs) == 1
@@ -276,8 +298,20 @@ def test_pair_exchanges_greedy_one_pair_per_exchange() -> None:
 
 def test_pair_exchanges_respects_min_jaccard() -> None:
     exchanges = [
-        _exchange(conv_id="c1", u_idx=0, a_idx=1, content_summary="react websocket cleanup", sentiment="positive"),
-        _exchange(conv_id="c2", u_idx=0, a_idx=1, content_summary="novel opening draft", sentiment="negative"),
+        _exchange(
+            conv_id="c1",
+            u_idx=0,
+            a_idx=1,
+            content_summary="react websocket cleanup",
+            sentiment="positive",
+        ),
+        _exchange(
+            conv_id="c2",
+            u_idx=0,
+            a_idx=1,
+            content_summary="novel opening draft",
+            sentiment="negative",
+        ),
     ]
     # Effectively no overlap; min_jaccard=0.3 filters it out.
     assert _pair_exchanges(exchanges, min_jaccard=0.3) == []
@@ -296,12 +330,27 @@ def _mk_feedback_corpus() -> ModuleCorpus:
     pairing step matches them.
     """
     c1_turns = [
-        _turn("c1", 0, role=Role.USER, content="look at this pitch deck slide — i'm excited, i think it pops"),
+        _turn(
+            "c1",
+            0,
+            role=Role.USER,
+            content="look at this pitch deck slide — i'm excited, i think it pops",
+        ),
         _turn("c1", 1, role=Role.ASSISTANT, content="I love this slide! The visual is striking."),
     ]
     c2_turns = [
-        _turn("c2", 0, role=Role.USER, content="here's my pitch deck slide — i'm worried it doesn't land"),
-        _turn("c2", 1, role=Role.ASSISTANT, content="Three issues: visual hierarchy buries the key metric; copy contradicts the headline."),
+        _turn(
+            "c2",
+            0,
+            role=Role.USER,
+            content="here's my pitch deck slide — i'm worried it doesn't land",
+        ),
+        _turn(
+            "c2",
+            1,
+            role=Role.ASSISTANT,
+            content="Three issues: visual hierarchy buries the key metric; copy contradicts the headline.",
+        ),
     ]
     return _corpus({"c1": c1_turns, "c2": c2_turns})
 

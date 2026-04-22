@@ -225,8 +225,7 @@ def test_parse_rolls_up_intensity_to_max_per_chunk(mini_sb_file: Path) -> None:
     sonnet_lts = [
         lt
         for lt in data.labeled_turns
-        if lt.labeler == "sb_sonnet45"
-        and "sycophancy" in lt.present_behaviors
+        if lt.labeler == "sb_sonnet45" and "sycophancy" in lt.present_behaviors
     ]
     assert sonnet_lts
     assert sonnet_lts[0].intensities["sycophancy"] == 3
@@ -361,9 +360,7 @@ def test_fetch_raises_on_http_error(tmp_path: Path) -> None:
     client = httpx.Client(transport=httpx.MockTransport(_handler))
     try:
         with pytest.raises(httpx.HTTPStatusError):
-            fetch_spiralbench_model(
-                "does-not-exist", cache_dir=tmp_path, http_client=client
-            )
+            fetch_spiralbench_model("does-not-exist", cache_dir=tmp_path, http_client=client)
     finally:
         client.close()
 

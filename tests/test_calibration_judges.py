@@ -211,10 +211,7 @@ async def test_module_a_judge_chunk_size_configurable(
     mock_anthropic_client: Callable[..., Any],
 ) -> None:
     conv = "c1"
-    turns = [
-        _turn(conv, i, Role.USER if i % 2 == 0 else Role.ASSISTANT)
-        for i in range(6)
-    ]
+    turns = [_turn(conv, i, Role.USER if i % 2 == 0 else Role.ASSISTANT) for i in range(6)]
     corpus = _corpus([conv], {conv: turns})
 
     # chunk_size=2 = 1 assistant turn per chunk → 3 calls for 3 asst turns

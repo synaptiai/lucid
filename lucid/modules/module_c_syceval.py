@@ -318,11 +318,7 @@ def _score_to_finding(
         explanation=(
             f"SycEval: {score.classification} cave-in on "
             f"{source_finding.module.value}/{source_finding.behavior} event."
-            + (
-                f" Correct answer: {score.correct_answer}."
-                if score.correct_answer
-                else ""
-            )
+            + (f" Correct answer: {score.correct_answer}." if score.correct_answer else "")
         ),
         citation=CITATION_SYCEVAL,
         detected_by=[MODEL],
@@ -431,9 +427,7 @@ class ModuleCSycEval:
                         message=str(exc)[:500],
                     )
 
-        return list(
-            await asyncio.gather(*(_classify(f) for f in candidates))
-        )
+        return list(await asyncio.gather(*(_classify(f) for f in candidates)))
 
     async def _call_create(
         self,

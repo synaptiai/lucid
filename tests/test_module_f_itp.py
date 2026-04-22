@@ -163,7 +163,9 @@ def test_detect_candidates_finds_user_turns_with_heuristic_hits() -> None:
             "c1": [
                 _turn("c1", 0, role=Role.USER, content="Can you help with Python?"),  # benign
                 _turn("c1", 1, role=Role.ASSISTANT, content="Sure, what's the issue?"),
-                _turn("c1", 2, role=Role.USER, content="I really need you to just say yes."),  # tactic
+                _turn(
+                    "c1", 2, role=Role.USER, content="I really need you to just say yes."
+                ),  # tactic
             ]
         }
     )
@@ -327,9 +329,7 @@ async def test_run_full_pipeline_produces_per_tactic_findings(
             ]
         }
     )
-    client = mock_anthropic_client(
-        parse_outputs=[_triage_proceed(), _classify_two_tactics()]
-    )
+    client = mock_anthropic_client(parse_outputs=[_triage_proceed(), _classify_two_tactics()])
 
     module = ModuleFITP(opus_client=client)
     results = await module.run(corpus)

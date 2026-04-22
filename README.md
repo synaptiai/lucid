@@ -20,7 +20,7 @@ Pre-release. Hackathon build, April 21–26, 2026. Expect rough edges until v0.1
 uvx lucid --help
 
 # Or from source
-git clone https://github.com/<user>/lucid.git
+git clone https://github.com/synaptiai/lucid.git
 cd lucid
 uv sync --extra dev
 uv run lucid --help
@@ -31,7 +31,7 @@ uv run lucid --help
 ```bash
 # Configure API keys
 cp .env.example .env.local
-$EDITOR .env.local    # set ANTHROPIC_API_KEY and VOYAGE_API_KEY
+$EDITOR .env.local    # set ANTHROPIC_API_KEY and VOYAGE_API_KEY (optional; for Module H)
 
 # Dry-run first (parses + samples + estimates cost; no LLM spend)
 uv run lucid audit --source claude-code --path ~/.claude/projects --sample 20 --dry-run
@@ -40,7 +40,36 @@ uv run lucid audit --source claude-code --path ~/.claude/projects --sample 20 --
 uv run lucid audit --source claude-code --path ~/.claude/projects --sample 100
 ```
 
-The report lands at `report/<run-id>.html` and opens in your default browser.
+The report lands at `report/<run-id>.html` — a static HTML file with no external
+scripts. Open it in any browser.
+
+### See a sample report without running an audit
+
+```bash
+uv run python demo/render_demo_report.py
+open report/lucid-demo.html
+```
+
+This renders Lucid's HTML format against a synthetic seeded corpus
+(`demo/corpus/`) using pre-fabricated findings for every detected pattern
+class. No API calls, no cost.
+
+## Modules
+
+| Module | What it detects | Citation |
+|---|---|---|
+| A | 17 Spiral-Bench behaviors on assistant turns (intensity 1-3) | [Spiral-Bench v1.2](https://github.com/sam-paech/spiral-bench) |
+| B.1 | Feedback sycophancy: direction flips on similar content under opposite user sentiment | [Sharma et al. 2023](https://arxiv.org/abs/2310.13548) |
+| B.2 | Answer sycophancy: cave-in on a correct answer under low-info user pressure | Sharma et al. 2023 |
+| C | Progressive/regressive classifier on A+B sycophancy events | [Fanous & Goldberg 2025 (SycEval)](https://arxiv.org/abs/2504.01727) |
+| D (opt-in) | Perspective sycophancy: cross-turn framing / premise / vocabulary drift | Jain et al. 2025 |
+| E | Cross-conversation belief drift with evidence-vs-pressure attribution | [BeliefShift arxiv:2603.23848](https://arxiv.org/abs/2603.23848) |
+| F | 9-category user-prompt influence tactics analyzer | [Influence Tactics Protocol](https://github.com/synaptiai/influence-tactics-protocol) |
+| G | Deterministic time/model attribution | Lucid methodology §5 |
+| H | Memory-corpus consistency via retrieval + two-stage verification | [MedTrust-RAG 2025](https://arxiv.org/pdf/2510.14400) |
+
+Each module's prompts and rubric live under `prompts/module_<letter>/`. Every
+finding in the report cites the framework that scored it.
 
 ## What Lucid does and doesn't do
 

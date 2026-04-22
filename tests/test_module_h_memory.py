@@ -76,10 +76,7 @@ def _conv(conv_id: str, *, turn_count: int, updated: datetime) -> Conversation:
 
 def _make_corpus(turns_by_conv: dict[str, list[Turn]]) -> ModuleCorpus:
     now = datetime(2026, 2, 1, tzinfo=UTC)
-    convs = {
-        cid: _conv(cid, turn_count=len(v), updated=now)
-        for cid, v in turns_by_conv.items()
-    }
+    convs = {cid: _conv(cid, turn_count=len(v), updated=now) for cid, v in turns_by_conv.items()}
     return ModuleCorpus(
         conversations=convs,
         turns_by_conversation=turns_by_conv,
@@ -255,8 +252,10 @@ def _seeded_corpus_store_and_static_embeddings(
         turns=turns,
     )
     corpus = _make_corpus(
-        {"c1": [t for t in turns if t.conversation_id == "c1"],
-         "c2": [t for t in turns if t.conversation_id == "c2"]}
+        {
+            "c1": [t for t in turns if t.conversation_id == "c1"],
+            "c2": [t for t in turns if t.conversation_id == "c2"],
+        }
     )
 
     # Static embedding mapping. Chunks: c1 pair (contains "Acme") + c2 pair
@@ -283,6 +282,7 @@ def _seeded_corpus_store_and_static_embeddings(
 def _make_mock_client(outputs: list[Any]) -> MagicMock:
     """Builds a MagicMock client whose messages.create yields the given
     outputs in order. Each output is expected to have ``model_dump_json``."""
+
     async def _call(**_kwargs: object) -> object:
         item = outputs.pop(0)
         if isinstance(item, Exception):
@@ -401,12 +401,8 @@ async def test_run_no_memory_returns_empty(tmp_path: Path) -> None:
 
     embedder = StaticEmbeddingProvider(default=np.zeros(STATIC_DIM, dtype=np.float32))
     client = _make_mock_client([])
-    corpus = ModuleCorpus(
-        conversations={}, turns_by_conversation={}, audit_run_id="run-h"
-    )
-    module = ModuleHMemory(
-        opus_client=client, store=store, embedding_provider=embedder
-    )
+    corpus = ModuleCorpus(conversations={}, turns_by_conversation={}, audit_run_id="run-h")
+    module = ModuleHMemory(opus_client=client, store=store, embedding_provider=embedder)
     assert await module.run(corpus) == []
     assert client.messages.create.await_count == 0
     store.close()
@@ -421,12 +417,8 @@ async def test_run_memory_but_empty_corpus_returns_error(tmp_path: Path) -> None
     )
     embedder = StaticEmbeddingProvider(default=np.zeros(STATIC_DIM, dtype=np.float32))
     client = _make_mock_client([])
-    corpus = ModuleCorpus(
-        conversations={}, turns_by_conversation={}, audit_run_id="run-h"
-    )
-    module = ModuleHMemory(
-        opus_client=client, store=store, embedding_provider=embedder
-    )
+    corpus = ModuleCorpus(conversations={}, turns_by_conversation={}, audit_run_id="run-h")
+    module = ModuleHMemory(opus_client=client, store=store, embedding_provider=embedder)
     results = await module.run(corpus)
 
     assert len(results) == 1
@@ -447,7 +439,8 @@ async def test_run_two_stage_refinement_runs_when_first_pass_insufficient(
         [1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32
     )
     embedder.mapping["User is a senior engineer."] = np.array(
-        [1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32  # same cluster as Acme chunk
+        [1, 0, 0, 0, 0, 0, 0, 0],
+        dtype=np.float32,  # same cluster as Acme chunk
     )
 
     extract_result = ExtractResult(
@@ -520,9 +513,7 @@ async def test_run_isolates_extract_error_per_memory_chunk(tmp_path: Path) -> No
 
     client = _make_mock_client([ExtractBoom("extract failed")])
 
-    module = ModuleHMemory(
-        opus_client=client, store=store, embedding_provider=embedder
-    )
+    module = ModuleHMemory(opus_client=client, store=store, embedding_provider=embedder)
     results = await module.run(corpus)
 
     errors = [r for r in results if isinstance(r, ModuleError)]
@@ -541,9 +532,7 @@ async def test_run_persists_embeddings_for_resume(tmp_path: Path) -> None:
     extract_result = ExtractResult(reasoning="", claims=[])
     client = _make_mock_client([extract_result])
 
-    module = ModuleHMemory(
-        opus_client=client, store=store, embedding_provider=embedder
-    )
+    module = ModuleHMemory(opus_client=client, store=store, embedding_provider=embedder)
     await module.run(corpus)
 
     assert store.count("embeddings") >= 1
@@ -558,9 +547,7 @@ async def test_run_persists_embeddings_for_resume(tmp_path: Path) -> None:
     )
     # Simpler: reset by constructing a fresh module + client.
     client2 = _make_mock_client([ExtractResult(reasoning="", claims=[])])
-    module2 = ModuleHMemory(
-        opus_client=client2, store=store, embedding_provider=embedder
-    )
+    module2 = ModuleHMemory(opus_client=client2, store=store, embedding_provider=embedder)
     await module2.run(corpus)
 
     # No new corpus embed: the pre-index short-circuited on cache hits.
@@ -580,9 +567,7 @@ async def test_run_persists_embeddings_for_resume(tmp_path: Path) -> None:
 def test_module_loads_all_three_prompts(tmp_path: Path) -> None:
     store, _, embedder = _seeded_corpus_store_and_static_embeddings(tmp_path)
     client = _make_mock_client([])
-    module = ModuleHMemory(
-        opus_client=client, store=store, embedding_provider=embedder
-    )
+    module = ModuleHMemory(opus_client=client, store=store, embedding_provider=embedder)
     assert module._extract_prompt.model == MODEL_OPUS
     assert module._classify_prompt.model == MODEL_OPUS
     assert module._refine_prompt.model == "claude-sonnet-4-6"

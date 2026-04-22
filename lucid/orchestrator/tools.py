@@ -161,9 +161,7 @@ def _row_to_turn(row: Any) -> Turn:
         role=Role(row["role"]),
         content=row["content"],
         blocks=blocks,
-        timestamp=(
-            datetime.fromisoformat(row["timestamp"]) if row["timestamp"] else None
-        ),
+        timestamp=(datetime.fromisoformat(row["timestamp"]) if row["timestamp"] else None),
         parent_message_uuid=row["parent_message_uuid"],
         token_count=row["token_count"],
     )
@@ -262,9 +260,7 @@ def _load_findings(
                 quote_user=row["quote_user"],
                 quote_assistant=row["quote_assistant"],
                 evidence_quotes=(
-                    orjson.loads(row["evidence_quotes_json"])
-                    if row["evidence_quotes_json"]
-                    else []
+                    orjson.loads(row["evidence_quotes_json"]) if row["evidence_quotes_json"] else []
                 ),
                 explanation=row["explanation"],
                 citation=row["citation"],
@@ -608,8 +604,7 @@ def build_tool_registry(
                 "module": module_name,
                 "status": "skipped",
                 "message": (
-                    "Module D is opt-in; start the audit with "
-                    "--include-module-d to enable it."
+                    "Module D is opt-in; start the audit with --include-module-d to enable it."
                 ),
             }
 
@@ -667,8 +662,7 @@ def build_tool_registry(
 
         progress_log(
             "INFO",
-            f"invoke_module({module_name}) running over {len(corpus.conversations)} "
-            f"conversations.",
+            f"invoke_module({module_name}) running over {len(corpus.conversations)} conversations.",
         )
 
         try:

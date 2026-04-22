@@ -196,8 +196,7 @@ MODULE_DESCRIPTIONS: dict[ModuleName, tuple[str, str]] = {
     ),
     ModuleName.E_BELIEFSHIFT: (
         "Module E — BeliefShift",
-        "Cross-conversation belief-drift with evidence-vs-pressure "
-        "attribution on each shift.",
+        "Cross-conversation belief-drift with evidence-vs-pressure attribution on each shift.",
     ),
     ModuleName.F_ITP: (
         "Module F — Influence Tactics Protocol",
@@ -265,7 +264,9 @@ def _detail_for_finding(f: Finding) -> FindingDetail:
     )
 
 
-def _top_details(findings: Sequence[Finding], *, n: int = TOP_DETAILS_PER_MODULE) -> list[FindingDetail]:
+def _top_details(
+    findings: Sequence[Finding], *, n: int = TOP_DETAILS_PER_MODULE
+) -> list[FindingDetail]:
     """Top-n findings for drill-down, sorted by intensity desc, confidence desc."""
     scored = sorted(
         findings,

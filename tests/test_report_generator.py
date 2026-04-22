@@ -115,10 +115,34 @@ def _finding(
 
 def _sample_findings() -> list[Finding]:
     return [
-        _finding(id_="a1", module=ModuleName.A_SPIRALBENCH, behavior="pushback", intensity=2, confidence=0.85),
-        _finding(id_="a2", module=ModuleName.A_SPIRALBENCH, behavior="pushback", intensity=3, confidence=0.92),
-        _finding(id_="a3", module=ModuleName.A_SPIRALBENCH, behavior="sycophancy", intensity=1, confidence=0.60),
-        _finding(id_="b1", module=ModuleName.B_SHARMA, behavior="feedback-sycophancy", intensity=2, confidence=0.75),
+        _finding(
+            id_="a1",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="pushback",
+            intensity=2,
+            confidence=0.85,
+        ),
+        _finding(
+            id_="a2",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="pushback",
+            intensity=3,
+            confidence=0.92,
+        ),
+        _finding(
+            id_="a3",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="sycophancy",
+            intensity=1,
+            confidence=0.60,
+        ),
+        _finding(
+            id_="b1",
+            module=ModuleName.B_SHARMA,
+            behavior="feedback-sycophancy",
+            intensity=2,
+            confidence=0.75,
+        ),
         _finding(
             id_="g1",
             module=ModuleName.G_ATTRIBUTION,
@@ -350,7 +374,7 @@ def test_render_shows_plain_bar_when_no_beta_params() -> None:
 
 
 def _xss_payload() -> str:
-    return '<script>alert(1)</script><img src=x onerror=alert(2)>'
+    return "<script>alert(1)</script><img src=x onerror=alert(2)>"
 
 
 def test_xss_payload_escaped_in_explanation() -> None:

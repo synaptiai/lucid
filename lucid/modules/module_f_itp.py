@@ -88,9 +88,7 @@ __all__ = [
 ]
 
 
-CITATION_ITP = (
-    "Influence Tactics Protocol, https://github.com/synaptiai/influence-tactics-protocol"
-)
+CITATION_ITP = "Influence Tactics Protocol, https://github.com/synaptiai/influence-tactics-protocol"
 MODULE_NAME = ModuleName.F_ITP
 TRIAGE_PROMPT_VERSION = "triage_v1"
 CLASSIFY_PROMPT_VERSION = "classify_v1"
@@ -224,11 +222,7 @@ def _render_classify_request(
         f"decision: {triage.decision}",
         f"rationale_category: {triage.rationale_category}",
     ]
-    return (
-        base
-        + "\n"
-        + f"{_STAGE2_OPEN}\n{chr(10).join(stage2_lines)}\n{_STAGE2_CLOSE}\n"
-    )
+    return base + "\n" + f"{_STAGE2_OPEN}\n{chr(10).join(stage2_lines)}\n{_STAGE2_CLOSE}\n"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -289,9 +283,7 @@ def _finding_id(
     turn_id: str,
     category: str,
 ) -> str:
-    raw = (
-        f"{audit_run_id}:{conversation_id}:{MODULE_NAME.value}:{turn_id}:{category}"
-    ).encode()
+    raw = (f"{audit_run_id}:{conversation_id}:{MODULE_NAME.value}:{turn_id}:{category}").encode()
     return hashlib.sha256(raw).hexdigest()
 
 

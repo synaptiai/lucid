@@ -294,8 +294,10 @@ class VoyageEmbeddingProvider:
                 all_vectors[original_i] = sub.vectors[local_i]
             total_tokens += sub.input_tokens
 
-        stacked = np.stack(all_vectors, axis=0) if all_vectors else np.zeros(
-            (0, self.dim), dtype=np.float32
+        stacked = (
+            np.stack(all_vectors, axis=0)
+            if all_vectors
+            else np.zeros((0, self.dim), dtype=np.float32)
         )
         return EmbeddingBatchResult(vectors=stacked, input_tokens=total_tokens)
 
@@ -384,9 +386,7 @@ class StaticEmbeddingProvider:
                 else:
                     raise KeyError(f"StaticEmbeddingProvider has no mapping for {t!r}")
             rows.append(vec.astype(np.float32, copy=False))
-        stacked = (
-            np.stack(rows, axis=0) if rows else np.zeros((0, self.dim), dtype=np.float32)
-        )
+        stacked = np.stack(rows, axis=0) if rows else np.zeros((0, self.dim), dtype=np.float32)
         return EmbeddingBatchResult(vectors=stacked, input_tokens=0)
 
 
@@ -422,8 +422,7 @@ def cosine_similarity_matrix(
         raise ValueError(f"corpus_matrix must be 2-D, got shape {corpus_matrix.shape}")
     if query_vec.shape[0] != corpus_matrix.shape[1]:
         raise ValueError(
-            f"query dim {query_vec.shape[0]} does not match corpus dim "
-            f"{corpus_matrix.shape[1]}"
+            f"query dim {query_vec.shape[0]} does not match corpus dim {corpus_matrix.shape[1]}"
         )
 
     if corpus_norm is None:
@@ -460,5 +459,3 @@ def top_k_indices(
     # argpartition is O(n); argsort-on-slice recovers descending order.
     partitioned = np.argpartition(-similarities, kth=k_effective - 1)[:k_effective]
     return partitioned[np.argsort(-similarities[partitioned])]
-
-

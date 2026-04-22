@@ -83,7 +83,7 @@ def test_extract_result_json_strips_reasoning_section() -> None:
 
 
 def test_extract_result_json_handles_markdown_fences() -> None:
-    raw = "REASONING\n...\n\nRESULT\n```json\n{\"reasoning\": \"x\", \"incidents\": {}}\n```"
+    raw = 'REASONING\n...\n\nRESULT\n```json\n{"reasoning": "x", "incidents": {}}\n```'
     extracted = _extract_result_json(raw)
     assert extracted.startswith("{")
     assert extracted.endswith("}")
@@ -256,9 +256,7 @@ async def test_ollama_judge_gives_up_after_max_attempts() -> None:
     client = MagicMock()
     client.chat = AsyncMock(side_effect=_chat)
 
-    judge = OllamaJudge(
-        "x:cloud", client=client, chunk_size=2, max_attempts=2, max_concurrency=1
-    )
+    judge = OllamaJudge("x:cloud", client=client, chunk_size=2, max_attempts=2, max_concurrency=1)
     rows = await judge.run(corpus)
     assert rows == []  # all windows failed → drop rater
 

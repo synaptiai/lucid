@@ -158,9 +158,7 @@ def compute_disagreements(
 
     # Index rater labels by (conv, turn) for O(1) lookup.
     by_rater_cell: dict[str, dict[tuple[str, str], LabeledTurn]] = {
-        rater: {
-            (lt.conversation_id, lt.turn_id): lt for lt in labels_by_rater[rater]
-        }
+        rater: {(lt.conversation_id, lt.turn_id): lt for lt in labels_by_rater[rater]}
         for rater in raters
     }
 

@@ -42,6 +42,9 @@ Thumbs.db
 .lucid/
 report/*.html
 corpus/
+# demo/corpus/ is a committed synthetic fixture — exempt from the corpus/ rule.
+!demo/corpus/
+!demo/corpus/**
 calibration-runs/
 
 # Claude Code workspace (local-only)

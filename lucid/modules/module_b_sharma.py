@@ -102,8 +102,7 @@ __all__ = [
 
 
 CITATION_SHARMA_2023 = (
-    "Sharma et al. 2023, 'Towards Understanding Sycophancy in Language Models', "
-    "arxiv:2310.13548"
+    "Sharma et al. 2023, 'Towards Understanding Sycophancy in Language Models', arxiv:2310.13548"
 )
 MODULE_NAME = ModuleName.B_SHARMA
 EXTRACT_PROMPT_VERSION = "extract_v1"
@@ -308,14 +307,15 @@ def _render_exchange(
 
 
 def _render_feedback_pair(pair: PairedExchanges) -> str:
-    a = _render_exchange(_EXCHANGE_A_OPEN, _EXCHANGE_A_CLOSE, pair.a.user_turn, pair.a.assistant_turn)
-    b = _render_exchange(_EXCHANGE_B_OPEN, _EXCHANGE_B_CLOSE, pair.b.user_turn, pair.b.assistant_turn)
+    a = _render_exchange(
+        _EXCHANGE_A_OPEN, _EXCHANGE_A_CLOSE, pair.a.user_turn, pair.a.assistant_turn
+    )
+    b = _render_exchange(
+        _EXCHANGE_B_OPEN, _EXCHANGE_B_CLOSE, pair.b.user_turn, pair.b.assistant_turn
+    )
     # Use the positive-sentiment exchange's content summary as the common label.
     summary = _escape_delimiters(pair.a.extract.content_summary)
-    return (
-        f"{a}\n\n{b}\n\n"
-        f"{_CONTENT_SUMMARY_OPEN}\n{summary}\n{_CONTENT_SUMMARY_CLOSE}\n"
-    )
+    return f"{a}\n\n{b}\n\n{_CONTENT_SUMMARY_OPEN}\n{summary}\n{_CONTENT_SUMMARY_CLOSE}\n"
 
 
 def _render_answer_triple(triple: AnswerTriple) -> str:
@@ -335,22 +335,75 @@ def _render_answer_triple(triple: AnswerTriple) -> str:
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_\-]{2,}")
 _STOPWORDS: frozenset[str] = frozenset(
     {
-        "the", "a", "an", "and", "or", "but", "if", "then", "for", "of", "to",
-        "in", "on", "at", "by", "with", "from", "as", "is", "are", "was", "were",
-        "be", "been", "being", "my", "your", "their", "our", "this", "that",
-        "these", "those", "some", "any", "all", "not", "no", "do", "does",
-        "did", "can", "could", "will", "would", "should", "may", "might", "has",
-        "have", "had", "about", "into", "over", "under", "just", "really",
-        "first", "second", "third", "thing", "stuff",
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "if",
+        "then",
+        "for",
+        "of",
+        "to",
+        "in",
+        "on",
+        "at",
+        "by",
+        "with",
+        "from",
+        "as",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "my",
+        "your",
+        "their",
+        "our",
+        "this",
+        "that",
+        "these",
+        "those",
+        "some",
+        "any",
+        "all",
+        "not",
+        "no",
+        "do",
+        "does",
+        "did",
+        "can",
+        "could",
+        "will",
+        "would",
+        "should",
+        "may",
+        "might",
+        "has",
+        "have",
+        "had",
+        "about",
+        "into",
+        "over",
+        "under",
+        "just",
+        "really",
+        "first",
+        "second",
+        "third",
+        "thing",
+        "stuff",
     }
 )
 
 
 def _tokens(text: str) -> frozenset[str]:
     return frozenset(
-        tok.lower()
-        for tok in _TOKEN_RE.findall(text)
-        if tok.lower() not in _STOPWORDS
+        tok.lower() for tok in _TOKEN_RE.findall(text) if tok.lower() not in _STOPWORDS
     )
 
 
@@ -524,7 +577,9 @@ def _score_to_feedback_finding(
     # B intentionally does not store them; downstream consumers test for
     # the literal string "feedback-sycophancy" to filter.
     behavior = (
-        "feedback-sycophancy" if score.classification == "sycophancy" else f"feedback-{score.classification}"
+        "feedback-sycophancy"
+        if score.classification == "sycophancy"
+        else f"feedback-{score.classification}"
     )
     intensity: int | None = score.severity if score.severity >= 1 else None
     return Finding(
@@ -677,7 +732,9 @@ class ModuleBSharma:
         # Stubs loaded to validate hashes on startup, never called.
         self._mimicry_prompt = load_prompt("b", MIMICRY_PROMPT_VERSION, **kwargs)  # type: ignore[arg-type]
         self._are_you_sure_prompt = load_prompt(
-            "b", ARE_YOU_SURE_PROMPT_VERSION, **kwargs  # type: ignore[arg-type]
+            "b",
+            ARE_YOU_SURE_PROMPT_VERSION,
+            **kwargs,  # type: ignore[arg-type]
         )
 
     async def run(self, corpus: ModuleCorpus) -> list[ModuleResult]:

@@ -137,9 +137,7 @@ class PerspectiveScore(BaseModel):
             if not self.patterns:
                 raise ValueError("severity>=1 requires at least one pattern")
             if len(self.quotes) != len(self.example_turn_indices):
-                raise ValueError(
-                    "quotes and example_turn_indices must have matching length"
-                )
+                raise ValueError("quotes and example_turn_indices must have matching length")
         return self
 
 
@@ -149,9 +147,7 @@ _BLOCK_CLOSE = "</CONVERSATION>"
 
 def _escape_delimiters(content: str) -> str:
     """Neutralise literal <CONVERSATION> / </CONVERSATION> in user content."""
-    return content.replace(_BLOCK_CLOSE, "</ CONVERSATION>").replace(
-        _BLOCK_OPEN, "< CONVERSATION>"
-    )
+    return content.replace(_BLOCK_CLOSE, "</ CONVERSATION>").replace(_BLOCK_OPEN, "< CONVERSATION>")
 
 
 def _render_conversation(turns: Sequence[Turn]) -> str:
@@ -331,9 +327,7 @@ class ModuleDPerspective:
                         message=str(exc)[:500],
                     )
 
-        return list(
-            await asyncio.gather(*(_score(cid) for cid in corpus.conversations))
-        )
+        return list(await asyncio.gather(*(_score(cid) for cid in corpus.conversations)))
 
     async def _call_create(self, turns: Sequence[Turn]) -> PerspectiveScore:
         """Call Opus 4.7 with the full conversation and parse the response."""
@@ -371,9 +365,7 @@ class ModuleDPerspective:
                             "cache_control": {"type": "ephemeral"},
                         }
                     ],
-                    messages=[
-                        {"role": "user", "content": _render_conversation(turns)}
-                    ],
+                    messages=[{"role": "user", "content": _render_conversation(turns)}],
                 )
         content = ""
         for block in response.content:

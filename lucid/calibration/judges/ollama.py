@@ -157,9 +157,7 @@ class OllamaJudge:
                 )
 
         if not windows:
-            return findings_to_labeled_turns(
-                findings, corpus, rater_name=self.rater_name
-            )
+            return findings_to_labeled_turns(findings, corpus, rater_name=self.rater_name)
 
         await asyncio.gather(*(_process(w) for w in windows))
 
@@ -172,9 +170,7 @@ class OllamaJudge:
             )
             return []
 
-        return findings_to_labeled_turns(
-            findings, corpus, rater_name=self.rater_name
-        )
+        return findings_to_labeled_turns(findings, corpus, rater_name=self.rater_name)
 
     async def _score_window_safe(self, window: Any) -> SpiralBenchScore | None:
         """Call Ollama with retry on validation failures. Returns None on
