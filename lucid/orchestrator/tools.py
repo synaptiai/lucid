@@ -51,6 +51,8 @@ from lucid.store.sqlite import CorpusStore
 if TYPE_CHECKING:
     from anthropic import AsyncAnthropic
 
+    from lucid.modules.embeddings import EmbeddingProvider
+
 _LOGGER = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -283,6 +285,7 @@ async def _run_module(
     store: CorpusStore,
     audit_run_id: str,
     anthropic_client: AsyncAnthropic | None,
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> list[ModuleResult]:
     """Instantiate and run the detection module for ``module_enum``.
 
@@ -332,6 +335,17 @@ async def _run_module(
         from lucid.modules.module_g_attribution import ModuleGAttribution
 
         return await ModuleGAttribution().run(corpus)
+
+    if module_enum is ModuleName.H_MEMORY:
+        assert anthropic_client is not None
+        assert embedding_provider is not None
+        from lucid.modules.module_h_memory import ModuleHMemory
+
+        return await ModuleHMemory(
+            opus_client=anthropic_client,
+            store=store,
+            embedding_provider=embedding_provider,
+        ).run(corpus)
 
     raise ValueError(f"unsupported module: {module_enum}")
 
@@ -389,6 +403,7 @@ def build_tool_registry(
     remaining_budget_usd: float = 0.0,
     anthropic_client: AsyncAnthropic | None = None,
     allow_module_d: bool = False,
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> ToolRegistry:
     """Wire up the 8 custom tools for a given audit run.
 
@@ -396,7 +411,7 @@ def build_tool_registry(
     CLI can pipe to the user. Defaults to `_LOGGER.info`.
 
     `anthropic_client` is consumed by ``invoke_module`` when a detection
-    module needs LLM access (A, B, C, D, E, F). When ``None``, those
+    module needs LLM access (A, B, C, D, E, F, H). When ``None``, those
     modules return a ``no_client`` status rather than running — useful
     for dry-run exercises and for tests that don't want to instantiate
     the SDK.
@@ -404,6 +419,11 @@ def build_tool_registry(
     `allow_module_d` gates invocation of Module D (perspective
     sycophancy), which is opt-in per the CLI's ``--include-module-d``
     flag. When ``False``, invoking module D returns ``skipped``.
+
+    `embedding_provider` is consumed by Module H (memory-corpus
+    consistency) for corpus chunk indexing and per-claim retrieval.
+    When ``None``, Module H returns ``no_embedding_provider`` — the
+    orchestrator logs and continues, rather than crashing the audit.
     """
     if progress_log is None:
 
@@ -593,12 +613,21 @@ def build_tool_registry(
                 ),
             }
 
-        # Module H lands in Phase 8.
-        if module_enum is ModuleName.H_MEMORY:
+        # Module H requires an embedding provider in addition to the client.
+        if module_enum is ModuleName.H_MEMORY and embedding_provider is None:
+            progress_log(
+                "WARNING",
+                "invoke_module(H) called without embedding_provider; skipping. "
+                "Module H requires Voyage or an equivalent EmbeddingProvider.",
+            )
             return {
                 "module": module_name,
-                "status": "not_implemented",
-                "message": "Module H (memory-corpus consistency) ships in Phase 8.",
+                "status": "no_embedding_provider",
+                "message": (
+                    "Module H requires an embedding provider (Voyage AI). "
+                    "Ensure VOYAGE_API_KEY is set or an EmbeddingProvider is "
+                    "injected into the tool registry."
+                ),
             }
 
         # LLM-backed modules need a client.
@@ -609,6 +638,7 @@ def build_tool_registry(
             ModuleName.D_PERSPECTIVE,
             ModuleName.E_BELIEFSHIFT,
             ModuleName.F_ITP,
+            ModuleName.H_MEMORY,
         }
         if module_enum in llm_modules and anthropic_client is None:
             progress_log(
@@ -648,6 +678,7 @@ def build_tool_registry(
                 store=store,
                 audit_run_id=audit_run_id,
                 anthropic_client=anthropic_client,
+                embedding_provider=embedding_provider,
             )
         except Exception as err:
             return {

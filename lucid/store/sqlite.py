@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 import orjson
@@ -236,6 +237,153 @@ class CorpusStore:
             """,
             (claim.id, account_uuid, claim.source, claim.claim_text, claim.category),
         )
+
+    def fetch_memory_files(self) -> list[MemoryFile]:
+        """Load every ingested :class:`MemoryFile`.
+
+        Memory-file rows carry ``conversations_memory`` (top-level) plus
+        ``project_memories_json`` (dict keyed by project UUID). We
+        rehydrate without attaching ``extracted_claims`` — that's the
+        ingest-time snapshot and Module H doesn't trust it as the claim
+        set (H.1 re-extracts with its own prompt).
+        """
+        rows = self.fetchall(
+            "SELECT account_uuid, conversations_memory, project_memories_json "
+            "FROM memory_files ORDER BY account_uuid"
+        )
+        out: list[MemoryFile] = []
+        for row in rows:
+            project_memories = (
+                orjson.loads(row["project_memories_json"])
+                if row["project_memories_json"]
+                else {}
+            )
+            out.append(
+                MemoryFile(
+                    account_uuid=row["account_uuid"],
+                    conversations_memory=row["conversations_memory"],
+                    project_memories=project_memories,
+                )
+            )
+        return out
+
+    # ----- embeddings (Module H) ------------------------------------
+
+    def insert_embedding(
+        self,
+        *,
+        id: str,
+        conversation_id: str | None,
+        turn_id: str | None,
+        chunk_text: str,
+        vector_blob: bytes,
+        dim: int,
+        model: str,
+    ) -> None:
+        """Insert one embedding row.
+
+        ``vector_blob`` is the raw bytes of a numpy float32 array of
+        length ``dim``. Callers construct it with
+        ``vec.astype(np.float32).tobytes()``; readers recover via
+        ``np.frombuffer(blob, dtype=np.float32)``. Keeping the blob
+        opaque at the DB layer preserves cross-platform portability.
+        """
+        self.connect().execute(
+            """
+            INSERT OR REPLACE INTO embeddings (
+                id, conversation_id, turn_id, chunk_text,
+                vector_blob, dim, model, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                id,
+                conversation_id,
+                turn_id,
+                chunk_text,
+                vector_blob,
+                dim,
+                model,
+                datetime.now(tz=UTC).isoformat(),
+            ),
+        )
+        self._commit()
+
+    def insert_embeddings(
+        self,
+        rows: Iterable[tuple[str, str | None, str | None, str, bytes, int, str]],
+    ) -> int:
+        """Bulk insert embedding rows. Each tuple is
+        ``(id, conversation_id, turn_id, chunk_text, vector_blob, dim, model)``.
+
+        Uses ``INSERT OR REPLACE`` so re-embedding a chunk overwrites
+        the stale entry rather than raising a primary-key conflict.
+        This is the resume path: if a prior audit crashed mid-embedding,
+        the next run re-embeds whatever didn't persist and overwrites
+        nothing valuable.
+        """
+        now = datetime.now(tz=UTC).isoformat()
+        materialized = [(*row, now) for row in rows]
+        self.connect().executemany(
+            """
+            INSERT OR REPLACE INTO embeddings (
+                id, conversation_id, turn_id, chunk_text,
+                vector_blob, dim, model, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            materialized,
+        )
+        self._commit()
+        return len(materialized)
+
+    def fetch_embeddings_for_conversations(
+        self,
+        conversation_ids: Sequence[str],
+        *,
+        model: str | None = None,
+    ) -> list[sqlite3.Row]:
+        """Fetch persisted embedding rows for the given conversations.
+
+        Returns rows with columns ``id, conversation_id, turn_id,
+        chunk_text, vector_blob, dim, model``. Callers rebuild the numpy
+        matrix by stacking ``np.frombuffer(row["vector_blob"],
+        np.float32)`` per row.
+        """
+        if not conversation_ids:
+            return []
+        placeholders = ",".join("?" for _ in conversation_ids)
+        params: list[object] = list(conversation_ids)
+        model_clause = ""
+        if model is not None:
+            model_clause = " AND model = ?"
+            params.append(model)
+        return self.fetchall(
+            f"SELECT id, conversation_id, turn_id, chunk_text, vector_blob, "
+            f"dim, model FROM embeddings WHERE conversation_id IN "
+            f"({placeholders}){model_clause}",
+            params,
+        )
+
+    def fetch_embedding_ids(
+        self,
+        ids: Sequence[str],
+        *,
+        model: str | None = None,
+    ) -> set[str]:
+        """Return the subset of ``ids`` that are already present in the
+        embeddings table — cache-hit lookup before embedding a batch."""
+        if not ids:
+            return set()
+        placeholders = ",".join("?" for _ in ids)
+        params: list[object] = list(ids)
+        model_clause = ""
+        if model is not None:
+            model_clause = " AND model = ?"
+            params.append(model)
+        rows = self.fetchall(
+            f"SELECT id FROM embeddings WHERE id IN ({placeholders}){model_clause}",
+            params,
+        )
+        return {r["id"] for r in rows}
 
     # ----- counters used by tests -----------------------------------
 

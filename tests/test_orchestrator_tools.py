@@ -177,14 +177,42 @@ async def test_invoke_module_d_skipped_without_opt_in(tmp_path: Path) -> None:
     store.close()
 
 
-async def test_invoke_module_h_returns_not_implemented(tmp_path: Path) -> None:
+async def test_invoke_module_h_without_embedding_provider_is_skipped(
+    tmp_path: Path,
+) -> None:
+    """Module H requires an EmbeddingProvider. Without one the dispatcher
+    returns ``no_embedding_provider`` and makes no LLM or embedding call."""
     store, run_id = _seed_store(tmp_path)
     registry = build_tool_registry(store=store, audit_run_id=run_id)
     result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
         {"module": "H", "conversation_ids": ["c-1"]}
     )
-    assert result["status"] == "not_implemented"
-    assert "Phase 8" in result["message"]
+    assert result["status"] == "no_embedding_provider"
+    assert "Voyage" in result["message"] or "EmbeddingProvider" in result["message"]
+    store.close()
+
+
+async def test_invoke_module_h_with_provider_but_no_client_returns_no_client(
+    tmp_path: Path,
+) -> None:
+    """Module H also requires an anthropic_client. With an embedding
+    provider but no client the dispatcher still short-circuits with
+    ``no_client`` — the client check runs after the provider check."""
+    import numpy as np
+
+    from lucid.modules.embeddings import STATIC_DIM, StaticEmbeddingProvider
+
+    store, run_id = _seed_store(tmp_path)
+    provider = StaticEmbeddingProvider(
+        default=np.zeros(STATIC_DIM, dtype=np.float32)
+    )
+    registry = build_tool_registry(
+        store=store, audit_run_id=run_id, embedding_provider=provider
+    )
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "H", "conversation_ids": ["c-1"]}
+    )
+    assert result["status"] == "no_client"
     store.close()
 
 
@@ -328,6 +356,110 @@ async def test_invoke_module_a_end_to_end_with_mocked_client(tmp_path: Path) -> 
     # Verify the finding actually persisted.
     persisted = await registry.get("get_findings").handler({"module": "A"})  # type: ignore[union-attr]
     assert persisted["count"] == result["findings_stored"]
+    store.close()
+
+
+async def test_invoke_module_h_end_to_end_with_mocked_client_and_provider(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: dispatcher runs Module H with mocked Opus + Voyage
+    stubs, persists findings, returns completed status."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import numpy as np
+    from anthropic.types import Usage
+
+    from lucid.modules.embeddings import STATIC_DIM, StaticEmbeddingProvider
+    from lucid.modules.module_h_memory import (
+        ClassifyScore,
+        ExtractedClaim,
+        ExtractResult,
+    )
+    from lucid.schemas import MemoryFile, MemorySupport
+
+    store, run_id = _seed_store(tmp_path)
+    # Seed: a memory file + a user-assistant pair the memory claims about.
+    store.insert_memory_file(
+        MemoryFile(
+            account_uuid="acct-1",
+            conversations_memory="User works at Acme Corp.",
+            project_memories={},
+        )
+    )
+    # The seeded conversation has turns t-0 / t-1 / t-2 alternating user/
+    # assistant/user. Module H only pairs user→assistant, so t-0/t-1 is a
+    # chunk.
+
+    # Static embeddings: the one chunk text and the one claim query both
+    # map to the same vector, so similarity = 1.0 and retrieval surfaces
+    # the chunk.
+    # Chunk text = "content for turn 0\n\n---\n\ncontent for turn 1"
+    same_vec = np.ones(STATIC_DIM, dtype=np.float32)
+    chunk_text = "content for turn 0\n\n---\n\ncontent for turn 1"
+    provider = StaticEmbeddingProvider(
+        mapping={
+            chunk_text: same_vec,
+            "User works at Acme Corp.": same_vec,
+        },
+        default=np.zeros(STATIC_DIM, dtype=np.float32),
+    )
+
+    extract_result = ExtractResult(
+        reasoning="one work claim",
+        claims=[
+            ExtractedClaim(
+                id="claim_1",
+                text="User works at Acme Corp.",
+                category="work",
+                source_span="User works at Acme Corp.",
+            )
+        ],
+    )
+    classify_well = ClassifyScore(
+        reasoning="excerpt references Acme directly",
+        classification=MemorySupport.WELL_SUPPORTED,
+        confidence=0.9,
+        evidence_quotes=["content for turn 0"],
+        cited_excerpt_numbers=[1],
+    )
+
+    outputs = [extract_result, classify_well]
+
+    async def _call(**_kwargs: object) -> object:
+        item = outputs.pop(0)
+        block = MagicMock()
+        block.type = "text"
+        block.text = item.model_dump_json()
+        resp = MagicMock()
+        resp.content = [block]
+        resp.usage = Usage(
+            input_tokens=10,
+            output_tokens=5,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        )
+        return resp
+
+    client = MagicMock()
+    client.messages = MagicMock()
+    client.messages.create = AsyncMock(side_effect=_call)
+
+    registry = build_tool_registry(
+        store=store,
+        audit_run_id=run_id,
+        anthropic_client=client,
+        embedding_provider=provider,
+    )
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "H", "conversation_ids": ["c-1"]}
+    )
+
+    assert result["status"] == "completed", result
+    assert result["findings_stored"] == 1
+    assert result["module_errors"] == []
+
+    persisted = await registry.get("get_findings").handler({"module": "H"})  # type: ignore[union-attr]
+    assert persisted["count"] == 1
     store.close()
 
 
