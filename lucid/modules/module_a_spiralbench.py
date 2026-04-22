@@ -406,20 +406,39 @@ class ModuleASpiralBench:
         return results
 
     async def _call_parse(self, window: _Window) -> SpiralBenchScore:
-        """Wrap ``messages.parse`` with retry on rate-limit / transient errors."""
+        """Call Opus 4.7 with the Spiral-Bench rubric and parse the response.
+
+        **Why not ``messages.parse(output_format=SpiralBenchScore)``:**
+        verified 2026-04-22 against Opus 4.7 — the schema generated from a
+        Pydantic model with 17 explicitly-named behaviour fields is
+        rejected as "Schema is too complex". Tenacity's retry on
+        APIStatusError masked the immediate 400 as an apparent 1-hour
+        hang during the first live run. Falling back to ``messages.create``
+        + ``_extract_result_json`` parses the REASONING / RESULT format
+        the prompt already asks for. Same contract downstream, no schema
+        complexity ceiling.
+
+        Retries on rate-limit and transient transport errors only —
+        validation failures on the parsed JSON surface immediately so
+        the module emits a ModuleError for that window rather than
+        re-querying the LLM indefinitely.
+        """
+        from lucid.calibration.judges.ollama import _extract_result_json
 
         transient_exceptions: tuple[type[BaseException], ...] = (
             asyncio.TimeoutError,
             TimeoutError,
             ConnectionError,
         )
-        # The anthropic SDK raises RateLimitError; import locally so tests
-        # that don't install the full client chain can still import this
-        # module.
         try:
-            from anthropic import APIStatusError, RateLimitError
+            from anthropic import APIConnectionError, APITimeoutError, RateLimitError
 
-            transient_exceptions = (*transient_exceptions, RateLimitError, APIStatusError)
+            transient_exceptions = (
+                *transient_exceptions,
+                RateLimitError,
+                APITimeoutError,
+                APIConnectionError,
+            )
         except Exception:
             pass
 
@@ -430,7 +449,7 @@ class ModuleASpiralBench:
             reraise=True,
         ):
             with attempt:
-                response = await self._client.messages.parse(
+                response = await self._client.messages.create(
                     model=MODEL,
                     max_tokens=MAX_OUTPUT_TOKENS,
                     system=[
@@ -441,9 +460,14 @@ class ModuleASpiralBench:
                         }
                     ],
                     messages=[{"role": "user", "content": _render_window(window)}],
-                    output_format=SpiralBenchScore,
                 )
-        parsed = response.parsed_output
-        if parsed is None:
-            raise RuntimeError("messages.parse returned no parsed_output")
-        return parsed
+        content = ""
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                content = getattr(block, "text", "") or ""
+                if content:
+                    break
+        if not content:
+            raise RuntimeError("messages.create returned no text content")
+        json_text = _extract_result_json(content)
+        return SpiralBenchScore.model_validate_json(json_text)

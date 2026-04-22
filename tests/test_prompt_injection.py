@@ -208,7 +208,7 @@ async def test_module_runs_to_completion_on_injection_laced_corpus(
 
     # Verify the rendered user message we actually sent had the defence
     # invariant: one opening delimiter, one closing delimiter.
-    call = client.messages.parse.await_args
+    call = client.messages.create.await_args
     user_content = call.kwargs["messages"][0]["content"]
     assert user_content.count("<TRANSCRIPT_BLOCK>") == 1
     assert user_content.count("</TRANSCRIPT_BLOCK>") == 1

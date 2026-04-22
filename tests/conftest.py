@@ -73,31 +73,54 @@ def mock_anthropic_client() -> Callable[..., MagicMock]:
             _make_response(output, usage_payload) for output in parse_outputs
         ]
 
-        async def _parse(**_kwargs: object) -> Any:
+        async def _call(**_kwargs: object) -> Any:
             if not responses:
                 raise IndexError(
-                    "mock_anthropic_client: messages.parse called but no "
+                    "mock_anthropic_client: messages call made but no "
                     "parse_outputs remain"
                 )
             return responses.pop(0)
 
         client = MagicMock()
         client.messages = MagicMock()
-        client.messages.parse = AsyncMock(side_effect=_parse)
+        # Module A currently uses messages.create; messages.parse stays
+        # on the mock so any older callers still work. Both point at the
+        # same response queue.
+        client.messages.create = AsyncMock(side_effect=_call)
+        client.messages.parse = AsyncMock(side_effect=_call)
         return client
 
     return _factory
 
 
 def _make_response(parsed_output: Any, usage: Usage) -> MagicMock:
-    """Build a lightweight stand-in for ``ParsedMessage[T]``.
+    """Build a lightweight stand-in for both a ``ParsedMessage`` (via
+    ``.parsed_output``) and a ``Message`` (via ``.content[0].text``).
 
-    We expose the attributes the module actually reads — ``parsed_output``
-    and ``usage`` — and nothing else. Adding the full ``content`` +
-    ``model`` + ``role`` surface would not help tests and would couple
-    them to the SDK's internal shape.
+    Tests can supply a ``SpiralBenchScore`` instance and the mock serves
+    both shapes — older tests relying on ``parsed_output``, newer ones on
+    ``content[0].text = model_dump_json()``. Keeping both avoids a
+    big-bang refactor of the test suite each time the SDK surface
+    changes.
     """
+    import json as _json
+
     response = MagicMock()
     response.parsed_output = parsed_output
     response.usage = usage
+
+    # content[0].text should be JSON the _extract_result_json helper can
+    # parse. We serialise the pydantic model if we got one; strings pass
+    # through as-is (lets tests inject raw reasoning/result blobs).
+    if hasattr(parsed_output, "model_dump_json"):
+        text = parsed_output.model_dump_json()
+    elif isinstance(parsed_output, str):
+        text = parsed_output
+    else:
+        text = _json.dumps(parsed_output)
+
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
+    response.content = [block]
     return response

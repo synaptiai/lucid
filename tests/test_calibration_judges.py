@@ -225,7 +225,7 @@ async def test_module_a_judge_chunk_size_configurable(
     judge = ModuleAJudge(client=client, chunk_size=2)
     rows = await judge.run(corpus)
 
-    assert client.messages.parse.await_count == 3
+    assert client.messages.create.await_count == 3
     assert judge.rater_name == "module_a_c2"
     assert len(rows) == 3  # 3 assistant turns
 

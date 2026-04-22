@@ -249,12 +249,11 @@ async def test_run_produces_findings_and_uses_cache_control(
     assert findings[0].detected_by == [MODEL]
 
     # Verify that the mock client received the cache_control marker.
-    call = client.messages.parse.await_args
+    call = client.messages.create.await_args
     system = call.kwargs["system"]
     assert isinstance(system, list)
     assert system[0]["cache_control"] == {"type": "ephemeral"}
     assert call.kwargs["model"] == MODEL
-    assert call.kwargs["output_format"] is SpiralBenchScore
 
 
 async def test_run_chunks_long_conversations_into_multiple_calls(
@@ -268,7 +267,7 @@ async def test_run_chunks_long_conversations_into_multiple_calls(
     )
     module = ModuleASpiralBench(client=client)
     await module.run(corpus)
-    assert client.messages.parse.await_count == 3
+    assert client.messages.create.await_count == 3
 
 
 async def test_run_skips_conversations_with_no_assistant_turns(
@@ -281,7 +280,7 @@ async def test_run_skips_conversations_with_no_assistant_turns(
     module = ModuleASpiralBench(client=client)
     results = await module.run(corpus)
     assert results == []
-    assert client.messages.parse.await_count == 0
+    assert client.messages.create.await_count == 0
 
 
 async def test_run_isolates_per_window_errors(
@@ -306,7 +305,7 @@ async def test_run_isolates_per_window_errors(
 
     responses = [BoomError("boom"), good_score]
 
-    async def _parse(**_kwargs: Any) -> Any:
+    async def _call(**_kwargs: Any) -> Any:
         item = responses.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -318,11 +317,17 @@ async def test_run_isolates_per_window_errors(
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,
         )
+        # Module A reads response.content[0].text and runs the
+        # REASONING/RESULT extractor; serialise the score as JSON.
+        block = MagicMock()
+        block.type = "text"
+        block.text = item.model_dump_json()
+        resp.content = [block]
         return resp
 
     client = MagicMock()
     client.messages = MagicMock()
-    client.messages.parse = AsyncMock(side_effect=_parse)
+    client.messages.create = AsyncMock(side_effect=_call)
 
     module = ModuleASpiralBench(client=client)
     results = await module.run(corpus)
