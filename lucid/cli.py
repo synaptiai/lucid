@@ -668,7 +668,7 @@ def _run_calibrate_auto_judge(
 
     client = None
     if chunk_sizes_csv.strip():
-        client = _anthropic_client_or_exit()
+        client = _async_anthropic_client_or_exit()
 
     try:
         behaviors = (
@@ -822,7 +822,12 @@ def _build_counter() -> TokenCounter:
 
 
 def _anthropic_client_or_exit() -> object:
-    """Return a real `anthropic.Anthropic()` client or raise typer.Exit."""
+    """Return a sync `anthropic.Anthropic()` client or raise typer.Exit.
+
+    Use for code paths that drive the sync API (Phase 5 Managed Agents
+    smoke runs via :mod:`lucid.run`). Async call paths (Module A
+    calibration) should use :func:`_async_anthropic_client_or_exit`.
+    """
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         _CONSOLE.print(
@@ -832,6 +837,29 @@ def _anthropic_client_or_exit() -> object:
     from anthropic import Anthropic
 
     return Anthropic(api_key=key)
+
+
+def _async_anthropic_client_or_exit() -> object:
+    """Return an `anthropic.AsyncAnthropic()` client or raise typer.Exit.
+
+    **Why the sync/async split matters:** Module A runs inside an
+    asyncio event loop (Semaphore-bounded concurrency). Passing a
+    synchronous ``Anthropic()`` client to code that ``await``s
+    ``client.messages.parse(...)`` does not raise — it returns a
+    coroutine-like object that, when awaited, executes a blocking HTTP
+    request on the event loop, serialising every concurrent call.
+    Visibly this looks like a hang (0% CPU, 1 open connection, no log
+    progress). Wiring an async client fixes the concurrency.
+    """
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        _CONSOLE.print(
+            "[red]ANTHROPIC_API_KEY is not set. Set it in .env.local or export it.[/red]"
+        )
+        raise typer.Exit(EXIT_USAGE)
+    from anthropic import AsyncAnthropic
+
+    return AsyncAnthropic(api_key=key, timeout=120.0)
 
 
 def _authorized_budget(estimate: CostEstimate, yes_authorize: int | None) -> float:
