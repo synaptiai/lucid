@@ -22,10 +22,17 @@ import orjson
 from lucid.schemas import (
     AuditRun,
     Conversation,
+    CorpusStats,
     Finding,
     MemoryClaim,
     MemoryFile,
+    ModuleName,
+    ModuleProgress,
+    ModuleProgressStatus,
     Project,
+    SamplingConfigRecord,
+    Source,
+    TokenUsage,
     Turn,
 )
 from lucid.store.init import connect
@@ -90,6 +97,49 @@ class CorpusStore:
             ),
         )
         self._commit()
+
+    def fetch_audit_run(self, run_id: str) -> AuditRun | None:
+        """Load one :class:`AuditRun` row by id, or ``None`` if absent.
+
+        The CLI calls this after :func:`lucid.run.run_audit` to feed the
+        audit run into :func:`lucid.report.write_report`. Keeping the
+        rehydration here (rather than in ``run.py``) means there is one
+        canonical round-trip for the audit-run columns — including the
+        JSON fields that roundtrip through Pydantic.
+        """
+        rows = self.fetchall(
+            "SELECT id, sources_json, source_paths_json, started_at, completed_at, "
+            "corpus_stats_json, token_usage_json, sampling_config_json, status, "
+            "corpus_fingerprint, prompt_versions_json, schema_version, "
+            "skipped_modules_json FROM audit_runs WHERE id = ?",
+            (run_id,),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        sources = [Source(s) for s in orjson.loads(row["sources_json"])]
+        source_paths = {Source(s): p for s, p in orjson.loads(row["source_paths_json"]).items()}
+        prompt_versions = {
+            ModuleName(m): v for m, v in orjson.loads(row["prompt_versions_json"]).items()
+        }
+        skipped_modules = [ModuleName(m) for m in orjson.loads(row["skipped_modules_json"])]
+        return AuditRun(
+            id=row["id"],
+            sources=sources,
+            source_paths=source_paths,
+            started_at=datetime.fromisoformat(row["started_at"]),
+            completed_at=(
+                datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
+            ),
+            corpus_stats=CorpusStats.model_validate_json(row["corpus_stats_json"]),
+            token_usage=TokenUsage.model_validate_json(row["token_usage_json"]),
+            sampling_config=SamplingConfigRecord.model_validate_json(row["sampling_config_json"]),
+            status=row["status"],
+            corpus_fingerprint=row["corpus_fingerprint"],
+            prompt_versions=prompt_versions,
+            schema_version=int(row["schema_version"]),
+            skipped_modules=skipped_modules,
+        )
 
     # ----- conversations + turns ------------------------------------
 
@@ -188,6 +238,145 @@ class CorpusStore:
             ),
         )
         self._commit()
+
+    def fetch_findings_for_run(self, audit_run_id: str) -> list[Finding]:
+        """Load every persisted :class:`Finding` for an audit run.
+
+        Mirrors the rehydration done inside the orchestrator's
+        ``_load_findings`` (which is scoped per-conversation for Module
+        C's second pass). The CLI calls this once after a session
+        completes to feed the report generator.
+        """
+        rows = self.fetchall(
+            "SELECT id, audit_run_id, conversation_id, turn_ids_json, turn_ids_hash, "
+            "module, behavior, intensity, confidence, confidence_alpha, "
+            "confidence_beta, quote_user, quote_assistant, evidence_quotes_json, "
+            "explanation, citation, detected_by_json, detected_at, prompt_version, "
+            "prompt_hash, metadata_json FROM findings WHERE audit_run_id = ? "
+            "ORDER BY detected_at ASC",
+            (audit_run_id,),
+        )
+        out: list[Finding] = []
+        for row in rows:
+            out.append(
+                Finding(
+                    id=row["id"],
+                    audit_run_id=row["audit_run_id"],
+                    conversation_id=row["conversation_id"],
+                    turn_ids=orjson.loads(row["turn_ids_json"]) if row["turn_ids_json"] else [],
+                    turn_ids_hash=row["turn_ids_hash"],
+                    module=ModuleName(row["module"]),
+                    behavior=row["behavior"],
+                    intensity=row["intensity"],
+                    confidence=row["confidence"],
+                    confidence_alpha=row["confidence_alpha"],
+                    confidence_beta=row["confidence_beta"],
+                    quote_user=row["quote_user"],
+                    quote_assistant=row["quote_assistant"],
+                    evidence_quotes=(
+                        orjson.loads(row["evidence_quotes_json"])
+                        if row["evidence_quotes_json"]
+                        else []
+                    ),
+                    explanation=row["explanation"],
+                    citation=row["citation"],
+                    detected_by=orjson.loads(row["detected_by_json"]),
+                    detected_at=datetime.fromisoformat(row["detected_at"]),
+                    prompt_version=row["prompt_version"],
+                    prompt_hash=row["prompt_hash"],
+                    metadata=orjson.loads(row["metadata_json"]) if row["metadata_json"] else {},
+                )
+            )
+        return out
+
+    # ----- module_progress (per-module lifecycle for resume) --------
+
+    def mark_module_started(self, audit_run_id: str, module: ModuleName) -> None:
+        """Record that a module has started running for ``audit_run_id``.
+
+        Idempotent across re-invocations: the row is upserted and the
+        ``completed_at`` / ``error_message`` columns are cleared so a
+        retry presents as ``running`` again rather than carrying over
+        the previous attempt's terminal state.
+        """
+        now = datetime.now(tz=UTC).isoformat()
+        self.connect().execute(
+            """
+            INSERT INTO module_progress (
+                audit_run_id, module, status, started_at, completed_at, error_message
+            ) VALUES (?, ?, 'running', ?, NULL, NULL)
+            ON CONFLICT (audit_run_id, module) DO UPDATE SET
+                status = 'running',
+                started_at = excluded.started_at,
+                completed_at = NULL,
+                error_message = NULL
+            """,
+            (audit_run_id, module.value, now),
+        )
+        self._commit()
+
+    def mark_module_finished(
+        self,
+        audit_run_id: str,
+        module: ModuleName,
+        *,
+        status: ModuleProgressStatus,
+        error_message: str | None = None,
+    ) -> None:
+        """Set a module's terminal status (``completed``/``failed``/``skipped``).
+
+        Upserts so that short-circuit modules (those that never go
+        through :meth:`mark_module_started` — e.g. Module D without
+        ``--include-module-d``) leave a row anyway. ``started_at`` and
+        ``completed_at`` carry the same skip-decision timestamp on
+        the upsert path.
+        """
+        if status in {"running", "pending"}:
+            raise ValueError(f"mark_module_finished requires a terminal status, got {status!r}")
+        now = datetime.now(tz=UTC).isoformat()
+        self.connect().execute(
+            """
+            INSERT INTO module_progress (
+                audit_run_id, module, status, started_at, completed_at, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (audit_run_id, module) DO UPDATE SET
+                status = excluded.status,
+                completed_at = excluded.completed_at,
+                error_message = excluded.error_message
+            """,
+            (audit_run_id, module.value, status, now, now, error_message),
+        )
+        self._commit()
+
+    def fetch_module_progress(self, audit_run_id: str) -> list[ModuleProgress]:
+        """Return every ``module_progress`` row for ``audit_run_id``.
+
+        Order is module-name ascending so the report and resume logic
+        see a stable sequence regardless of insertion order.
+        """
+        rows = self.fetchall(
+            "SELECT audit_run_id, module, status, started_at, completed_at, "
+            "error_message FROM module_progress WHERE audit_run_id = ? "
+            "ORDER BY module ASC",
+            (audit_run_id,),
+        )
+        out: list[ModuleProgress] = []
+        for row in rows:
+            out.append(
+                ModuleProgress(
+                    audit_run_id=row["audit_run_id"],
+                    module=ModuleName(row["module"]),
+                    status=row["status"],
+                    started_at=(
+                        datetime.fromisoformat(row["started_at"]) if row["started_at"] else None
+                    ),
+                    completed_at=(
+                        datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
+                    ),
+                    error_message=row["error_message"],
+                )
+            )
+        return out
 
     # ----- projects + memory ----------------------------------------
 

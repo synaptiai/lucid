@@ -101,3 +101,10 @@ def test_heartbeat_poke_resets_age() -> None:
     clock.t = 10.0
     mon.poke()
     assert not mon.is_stalled()
+
+
+def test_heartbeat_monitor_exposes_stall_seconds_property() -> None:
+    """Public read of the stall threshold — used by the watchdog's
+    log line in :func:`ManagedAgentsSession._start_stall_watchdog`."""
+    mon = HeartbeatMonitor(stall_seconds=42.5)
+    assert mon.stall_seconds == 42.5

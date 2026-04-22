@@ -342,3 +342,167 @@ def test_finding_empty_detected_by_rejected_by_db(tmp_path: Path) -> None:
                     "h",
                 ),
             )
+
+
+# ----- module_progress writers (L1) -----------------------------------
+
+
+def test_mark_module_started_inserts_running_row(tmp_path: Path) -> None:
+    """First call for a (run, module) pair lands a row with
+    ``status='running'`` and a populated ``started_at``."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store)
+        store.mark_module_started("run-1", ModuleName.A_SPIRALBENCH)
+
+        rows = store.fetchall(
+            "SELECT module, status, started_at, completed_at, error_message "
+            "FROM module_progress WHERE audit_run_id = ?",
+            ("run-1",),
+        )
+    assert len(rows) == 1
+    assert rows[0]["module"] == "A"
+    assert rows[0]["status"] == "running"
+    assert rows[0]["started_at"] is not None
+    assert rows[0]["completed_at"] is None
+    assert rows[0]["error_message"] is None
+
+
+def test_mark_module_started_resets_terminal_state_on_retry(tmp_path: Path) -> None:
+    """A retry — start, finish, start again — must leave the row as
+    ``running`` again with ``completed_at`` and ``error_message``
+    cleared. Otherwise resume tooling sees stale terminal state.
+    """
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store)
+        store.mark_module_started("run-1", ModuleName.A_SPIRALBENCH)
+        store.mark_module_finished(
+            "run-1",
+            ModuleName.A_SPIRALBENCH,
+            status="failed",
+            error_message="first attempt blew up",
+        )
+        store.mark_module_started("run-1", ModuleName.A_SPIRALBENCH)
+
+        rows = store.fetchall(
+            "SELECT status, completed_at, error_message FROM module_progress "
+            "WHERE audit_run_id = ? AND module = ?",
+            ("run-1", "A"),
+        )
+    assert len(rows) == 1
+    assert rows[0]["status"] == "running"
+    assert rows[0]["completed_at"] is None
+    assert rows[0]["error_message"] is None
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "skipped"])
+def test_mark_module_finished_accepts_every_terminal_status(tmp_path: Path, status: str) -> None:
+    """All three terminal statuses round-trip: status + completed_at +
+    error_message land in the row. Catches a typo in the SQL CHECK
+    constraint or the Python literal alias."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store)
+        store.mark_module_started("run-1", ModuleName.B_SHARMA)
+        store.mark_module_finished(
+            "run-1",
+            ModuleName.B_SHARMA,
+            status=status,  # type: ignore[arg-type]
+            error_message=f"reason for {status}",
+        )
+
+        row = store.fetchall(
+            "SELECT status, completed_at, error_message FROM module_progress "
+            "WHERE audit_run_id = ? AND module = ?",
+            ("run-1", "B"),
+        )[0]
+    assert row["status"] == status
+    assert row["completed_at"] is not None
+    assert row["error_message"] == f"reason for {status}"
+
+
+@pytest.mark.parametrize("non_terminal", ["pending", "running"])
+def test_mark_module_finished_rejects_non_terminal_status(
+    tmp_path: Path, non_terminal: str
+) -> None:
+    """Calling ``mark_module_finished`` with ``running`` or ``pending``
+    is a programmer error — surface it loudly rather than letting
+    the row land in an inconsistent state."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store)
+        with pytest.raises(ValueError, match="terminal status"):
+            store.mark_module_finished(
+                "run-1",
+                ModuleName.C_SYCEVAL,
+                status=non_terminal,  # type: ignore[arg-type]
+            )
+
+
+def test_mark_module_finished_upserts_when_no_started_row_exists(tmp_path: Path) -> None:
+    """Short-circuit modules (D opt-out, H no provider, no client)
+    skip ``mark_module_started`` entirely. ``mark_module_finished``
+    must still land a row so resume / triage tooling can see what
+    happened."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store)
+        store.mark_module_finished(
+            "run-1",
+            ModuleName.D_PERSPECTIVE,
+            status="skipped",
+            error_message="opt-in flag absent",
+        )
+
+        rows = store.fetchall(
+            "SELECT module, status, started_at, completed_at, error_message "
+            "FROM module_progress WHERE audit_run_id = ?",
+            ("run-1",),
+        )
+    assert len(rows) == 1
+    assert rows[0]["module"] == "D"
+    assert rows[0]["status"] == "skipped"
+    # Same skip-decision timestamp on both sides — duration of a
+    # skipped module is undefined-but-reported-as-zero.
+    assert rows[0]["started_at"] == rows[0]["completed_at"]
+    assert rows[0]["error_message"] == "opt-in flag absent"
+
+
+def test_fetch_module_progress_returns_typed_models(tmp_path: Path) -> None:
+    """Verify rehydration produces ``ModuleProgress`` instances with
+    the right fields and ``datetime`` values, not raw row dicts."""
+    from lucid.schemas import ModuleProgress
+
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store)
+        store.mark_module_started("run-1", ModuleName.A_SPIRALBENCH)
+        store.mark_module_finished("run-1", ModuleName.A_SPIRALBENCH, status="completed")
+        store.mark_module_finished(
+            "run-1",
+            ModuleName.D_PERSPECTIVE,
+            status="skipped",
+            error_message="opt-in absent",
+        )
+
+        progress = store.fetch_module_progress("run-1")
+    assert all(isinstance(p, ModuleProgress) for p in progress)
+    # Module-name ascending order.
+    assert [p.module for p in progress] == [
+        ModuleName.A_SPIRALBENCH,
+        ModuleName.D_PERSPECTIVE,
+    ]
+    a_row = progress[0]
+    assert a_row.status == "completed"
+    assert isinstance(a_row.started_at, datetime)
+    assert isinstance(a_row.completed_at, datetime)
+    d_row = progress[1]
+    assert d_row.status == "skipped"
+    assert d_row.error_message == "opt-in absent"

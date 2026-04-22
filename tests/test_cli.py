@@ -145,6 +145,36 @@ def test_calibrate_stub_exits_nonzero() -> None:
     assert result.exit_code == EXIT_USAGE
 
 
+# ----- _collect_prompt_versions (audit_runs.prompt_versions_json) ----
+
+
+def test_collect_prompt_versions_covers_every_module() -> None:
+    """A full --enabled set yields a version string per module.
+
+    Catches typos in any of the 8 module → ``*_PROMPT_VERSION``
+    constant bindings at unit-test time, rather than waiting for a
+    live audit to surface them.
+    """
+    from lucid.cli import _collect_prompt_versions
+    from lucid.schemas import ModuleName
+
+    versions = _collect_prompt_versions(list(ModuleName))
+    assert set(versions.keys()) == set(ModuleName)
+    for name, version in versions.items():
+        assert version, f"empty prompt_version for module {name!r}"
+
+
+def test_collect_prompt_versions_always_pins_module_g() -> None:
+    """Module G runs as the post-session safety net, so its version
+    is pinned even when the user's ``--enabled`` set excludes it."""
+    from lucid.cli import _collect_prompt_versions
+    from lucid.schemas import ModuleName
+
+    versions = _collect_prompt_versions([ModuleName.A_SPIRALBENCH])
+    assert ModuleName.G_ATTRIBUTION in versions
+    assert versions[ModuleName.G_ATTRIBUTION]
+
+
 # ----- helpers --------------------------------------------------------
 
 

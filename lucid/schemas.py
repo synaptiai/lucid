@@ -60,6 +60,11 @@ class MemorySupport(StrEnum):
 AuditStatus = Literal["running", "completed", "failed", "partial", "aborted_pre_spend"]
 
 
+# Status enum for ``module_progress.status``. Mirrors the SQL CHECK constraint
+# in ``store/schema.sql``; bumping either side requires bumping the other.
+ModuleProgressStatus = Literal["pending", "running", "completed", "failed", "skipped"]
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Content blocks — discriminated union
 # ──────────────────────────────────────────────────────────────────────────
@@ -271,6 +276,30 @@ class Finding(BaseModel):
     prompt_version: str  # e.g. "v1"; first-class column, never inferred
     prompt_hash: str  # sha256 of the prompt body used for this finding
     metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ModuleProgress(BaseModel):
+    """One row in ``module_progress`` — the per-module lifecycle log.
+
+    Lifecycle: ``running`` is set when ``invoke_module`` (or the
+    post-session safety net) starts a module; one of ``completed``,
+    ``failed``, ``skipped`` is set when the run terminates.
+
+    For modules that short-circuit (Module D without
+    ``--include-module-d``, Module H without an embedding provider,
+    LLM-backed modules without an Anthropic client) ``started_at`` and
+    ``completed_at`` carry the same skip-decision timestamp; the
+    duration of a skipped module is undefined-but-reported-as-zero.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    audit_run_id: str
+    module: ModuleName
+    status: ModuleProgressStatus
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
 
 
 class AuditRun(BaseModel):

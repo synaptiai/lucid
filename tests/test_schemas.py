@@ -247,6 +247,27 @@ def test_audit_status_literal_rejects_other() -> None:
     assert len(status_values) == 5
 
 
+def test_module_progress_status_literal_matches_schema_check() -> None:
+    """Mirror of the SQL CHECK constraint in ``store/schema.sql``.
+
+    These two surfaces drift independently; pin them here so a typo
+    on either side ('complete' vs 'completed', missing 'pending', …)
+    is caught at unit-test time rather than at first ``module_progress``
+    insert in production.
+    """
+    from typing import get_args
+
+    from lucid.schemas import ModuleProgressStatus
+
+    assert set(get_args(ModuleProgressStatus)) == {
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "skipped",
+    }
+
+
 # ----- content block discriminated union ----------------------------
 
 

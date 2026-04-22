@@ -1,10 +1,5 @@
 """Non-dry-run audit driver.
 
-Phase 5B shipped the *smoke* path: one live Managed Agents session that
-calls `query_corpus` then writes a single placeholder finding. The
-module-invocation surface is stubbed until Phase 7 wires the real
-modules.
-
 What this file owns:
 
 - Persisting an `AuditRun` row before any LLM call (so every Finding has
@@ -13,11 +8,29 @@ What this file owns:
   same SQLite file (CHECK constraints would still protect integrity
   but the user experience of "audit half-wrote, other audit finished"
   is bad).
-- Building the tool registry bound to (store, audit_run_id, budget).
+- Building the tool registry bound to (store, audit_run_id, budget,
+  async_client, embedding_provider, allow_module_d, cost_estimate).
 - Running the Managed Agents session with the supplied kickoff message
-  and system prompt.
+  and system prompt (the prompt is threaded through
+  ``OrchestratorConfig`` so there is no monkey-patching of
+  ``create_agent``).
+- Re-running Module G (deterministic time/model attribution) directly
+  against the persisted corpus once the session ends, as a safety net
+  in case the orchestrator skipped the in-session attribution call.
+- Rendering the HTML report from persisted findings and returning the
+  output path.
 - Transitioning the AuditRun to `completed` / `partial` / `failed`
   based on the session outcome.
+
+Two clients are required:
+
+- A *sync* ``Anthropic`` client drives :class:`ManagedAgentsSession` —
+  the SDK's ``beta.agents.create`` / ``events.send`` / ``events.stream``
+  surface is synchronous and the driver bridges to async internally.
+- An *async* :class:`AsyncAnthropic` client is handed to the dispatcher
+  (and from there to every detection module) so module ``await
+  client.messages.create(...)`` calls run as real coroutines instead of
+  blocking the event loop.
 """
 
 from __future__ import annotations
@@ -39,7 +52,8 @@ from lucid.orchestrator.managed_agent import (
     OrchestratorConfig,
     SessionOutcome,
 )
-from lucid.orchestrator.tools import build_tool_registry
+from lucid.orchestrator.tools import build_tool_registry, run_attribution_safety_net
+from lucid.report.generator import write_report
 from lucid.schemas import (
     AuditRun,
     AuditStatus,
@@ -56,11 +70,16 @@ from lucid.store import SCHEMA_VERSION, initialize_db
 from lucid.store.sqlite import CorpusStore
 
 if TYPE_CHECKING:  # pragma: no cover
+    from anthropic import Anthropic, AsyncAnthropic
+
+    from lucid.modules.embeddings import EmbeddingProvider
     from lucid.sampling import SamplingConfig
 
 _LOGGER = logging.getLogger(__name__)
 
 FILELOCK_SUFFIX = ".lucid.lock"
+
+DEFAULT_REPORT_DIR = Path("report")
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -102,6 +121,7 @@ class AuditResult:
     outcome: SessionOutcome | None
     findings_written: int
     reason: str
+    report_path: Path | None = None
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -121,7 +141,15 @@ def _lock_path_for(data_dir: Path) -> Path:
     return data_dir / FILELOCK_SUFFIX
 
 
-def _generate_run_id() -> str:
+def generate_run_id() -> str:
+    """Mint a fresh ``run-<12-hex>`` audit-run id.
+
+    Public so the CLI can pre-allocate the id and weave it into the
+    kickoff message before handing the same id back to ``run_audit``
+    via ``run_id=``. Without this, the orchestrator has no way to
+    reference the run it is working on (the session API does not
+    leak the audit-run id to the agent).
+    """
     return f"run-{uuid.uuid4().hex[:12]}"
 
 
@@ -223,6 +251,71 @@ def _count_findings(store: CorpusStore, run_id: str) -> int:
     return int(rows[0]["n"]) if rows else 0
 
 
+async def _attribution_safety_net(
+    *,
+    store: CorpusStore,
+    run_id: str,
+    sampled_ids: list[str],
+    progress_log: Callable[[str, str], None],
+) -> int:
+    """Bridge :func:`run_attribution_safety_net` + progress logging.
+
+    The orchestrator's system prompt instructs it to call
+    ``invoke_module(G)`` last, but Sonnet 4.6 sometimes skips a step
+    under token pressure or unusual error paths. Module G is
+    deterministic (no LLM, idempotent), so re-running it costs
+    nothing and fills any attribution gap. Returns the number of
+    *new* findings persisted (zero if the orchestrator already ran G).
+    """
+    stored, idempotent, errors = await run_attribution_safety_net(
+        store=store,
+        audit_run_id=run_id,
+        conversation_ids=sampled_ids,
+    )
+    if errors:
+        progress_log(
+            "WARNING",
+            f"post-run Module G surfaced {len(errors)} error(s); the report may have gaps.",
+        )
+    progress_log(
+        "INFO",
+        f"post-run Module G safety net: stored={stored}, idempotent_skips={idempotent}.",
+    )
+    return stored
+
+
+def _render_report_or_log(
+    *,
+    store: CorpusStore,
+    run_id: str,
+    output_dir: Path,
+    progress_log: Callable[[str, str], None],
+) -> Path | None:
+    """Fetch findings + audit_run row, render the HTML, return its path.
+
+    Failures here are logged but do not raise: the audit's findings
+    are already persisted in SQLite and the user can re-render from
+    them later. Surfacing a stack trace just to lose the report would
+    bury the actual data.
+    """
+    audit_run = store.fetch_audit_run(run_id)
+    if audit_run is None:
+        progress_log(
+            "ERROR",
+            f"could not load audit_run row for {run_id}; skipping report render.",
+        )
+        return None
+    findings = store.fetch_findings_for_run(run_id)
+    try:
+        path = write_report(audit_run, findings, output_dir=output_dir)
+    except Exception as err:  # pragma: no cover — logged for operator triage
+        _LOGGER.exception("report render failed")
+        progress_log("ERROR", f"report render failed: {err}")
+        return None
+    progress_log("INFO", f"Report written: {path}")
+    return path
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Public entry point
 # ──────────────────────────────────────────────────────────────────────────
@@ -232,21 +325,61 @@ def run_audit(
     *,
     inputs: AuditInputs,
     data_dir: Path,
-    client: Any,
+    client: Anthropic,
+    async_client: AsyncAnthropic,
     system_prompt: str,
     kickoff_message: str,
     prompt_versions: dict[ModuleName, str],
+    embedding_provider: EmbeddingProvider | None = None,
+    allow_module_d: bool = False,
     progress_log: Callable[[str, str], None] | None = None,
     lock_timeout_seconds: float = 0.1,
     session_runner: Callable[[ManagedAgentsSession, str], Coroutine[Any, Any, SessionOutcome]]
     | None = None,
     run_id: str | None = None,
+    report_dir: Path = DEFAULT_REPORT_DIR,
 ) -> AuditResult:
     """Execute a non-dry-run audit end-to-end.
 
-    `session_runner` is injectable so tests can plug in a fake instead of
-    a real Anthropic session. It defaults to `session.run(kickoff_message)`.
+    Parameters
+    ----------
+    client
+        *Sync* Anthropic client used by :class:`ManagedAgentsSession`
+        for the agent / environment / session / events transport. The
+        SDK's beta.agents surface is synchronous; the driver bridges to
+        async internally for the event loop.
+    async_client
+        :class:`AsyncAnthropic` client used by every detection module
+        (A, B, C, D, E, F, H) for ``await client.messages.create(...)``.
+        Modules unit-test against ``AsyncMock`` clients of this same
+        shape, so passing a sync client here causes silent event-loop
+        blocking on every classification call.
+    embedding_provider
+        Optional :class:`~lucid.modules.embeddings.EmbeddingProvider`
+        for Module H. ``None`` makes Module H return
+        ``no_embedding_provider`` from the dispatcher.
+    allow_module_d
+        Whether the dispatcher should run Module D when invoked. Wired
+        from ``--include-module-d`` at the CLI.
+    session_runner
+        Injectable for tests so a fake session can short-circuit the
+        Managed Agents transport. Defaults to
+        ``session.run(kickoff_message)``.
+
+    Returns
+    -------
+    AuditResult
+        Includes the rendered report path on success
+        (``report_dir / "<run_id>.html"``) or ``None`` if rendering
+        failed or the run aborted before any module produced output.
     """
+    if progress_log is None:
+
+        def _default_progress(level: str, message: str) -> None:
+            _LOGGER.log(logging.getLevelName(level), "%s", message)
+
+        progress_log = _default_progress
+
     data_dir.mkdir(parents=True, exist_ok=True)
     db_path = _db_path_for(data_dir)
     initialize_db(db_path)
@@ -262,7 +395,8 @@ def run_audit(
         ) from err
 
     try:
-        resolved_run_id = run_id or _generate_run_id()
+        resolved_run_id = run_id or generate_run_id()
+        report_path: Path | None = None
         with CorpusStore(db_path) as store:
             _persist_corpus(store, inputs.sampled, inputs.turns_by_conv)
             _create_audit_run_row(
@@ -277,34 +411,45 @@ def run_audit(
                 audit_run_id=resolved_run_id,
                 progress_log=progress_log,
                 remaining_budget_usd=inputs.authorized_budget_usd,
+                anthropic_client=async_client,
+                allow_module_d=allow_module_d,
+                embedding_provider=embedding_provider,
+                cost_estimate=inputs.estimate,
             )
             session = ManagedAgentsSession(
                 client=client,
                 registry=registry,
-                config=OrchestratorConfig(run_id=resolved_run_id),
+                config=OrchestratorConfig(
+                    run_id=resolved_run_id,
+                    system_prompt=system_prompt,
+                ),
             )
-            # Managed Agents `beta.agents.create` takes `system` as a string
-            # (not the messages-API list-of-blocks shape). Inject the
-            # smoke-mode prompt at the session level.
-            _inject_system_prompt_override(session, system_prompt)
 
             runner = session_runner or _default_session_runner
-            outcome: SessionOutcome | None = None
-            status: AuditStatus
-            reason: str
-            try:
-                outcome = asyncio.run(runner(session, kickoff_message))
-            except Exception as err:
-                _LOGGER.exception("audit session raised")
-                status = "failed"
-                reason = f"exception: {err}"
-            else:
-                if outcome.completed:
-                    status = "completed"
-                    reason = outcome.reason
-                else:
-                    status = "partial"
-                    reason = outcome.reason or "partial"
+            sampled_ids = [c.id for c in inputs.sampled]
+            # One asyncio.run for the whole pipeline. Two sequential
+            # ``asyncio.run`` calls would tear down a fresh event loop
+            # between the session and the safety net, killing any
+            # background SDK tasks (HTTP keep-alive, connection pools)
+            # the Anthropic client spawned during the session.
+            outcome, status, reason = asyncio.run(
+                _execute_session_and_safety_net(
+                    runner=runner,
+                    session=session,
+                    kickoff_message=kickoff_message,
+                    store=store,
+                    audit_run_id=resolved_run_id,
+                    sampled_ids=sampled_ids,
+                    progress_log=progress_log,
+                )
+            )
+
+            report_path = _render_report_or_log(
+                store=store,
+                run_id=resolved_run_id,
+                output_dir=report_dir,
+                progress_log=progress_log,
+            )
 
             _update_audit_run_status(
                 store, resolved_run_id, status, completed=(status == "completed")
@@ -317,40 +462,74 @@ def run_audit(
             outcome=outcome,
             findings_written=findings_written,
             reason=reason,
+            report_path=report_path,
         )
     finally:
         lock.release()
+
+
+async def _execute_session_and_safety_net(
+    *,
+    runner: Callable[[ManagedAgentsSession, str], Coroutine[Any, Any, SessionOutcome]],
+    session: ManagedAgentsSession,
+    kickoff_message: str,
+    store: CorpusStore,
+    audit_run_id: str,
+    sampled_ids: list[str],
+    progress_log: Callable[[str, str], None],
+) -> tuple[SessionOutcome | None, AuditStatus, str]:
+    """Drive the orchestrator session, then the Module G safety net.
+
+    Both phases share one event loop — the SDK's background HTTP
+    cleanup tasks live inside that loop and would be silently
+    destroyed if a fresh ``asyncio.run`` were spun up for the safety
+    net. The safety net always runs (even on a session exception) so
+    the report has attribution rows for whatever findings did persist.
+    """
+    outcome: SessionOutcome | None = None
+    status: AuditStatus
+    reason: str
+    try:
+        outcome = await runner(session, kickoff_message)
+    except Exception as err:
+        _LOGGER.exception("audit session raised")
+        status = "failed"
+        reason = f"exception: {err}"
+    else:
+        if outcome.completed:
+            status = "completed"
+            reason = outcome.reason
+        else:
+            status = "partial"
+            reason = outcome.reason or "partial"
+
+    try:
+        await _attribution_safety_net(
+            store=store,
+            run_id=audit_run_id,
+            sampled_ids=sampled_ids,
+            progress_log=progress_log,
+        )
+    except Exception as err:
+        # Findings are already in the DB; losing the audit_runs row
+        # update for a safety-net failure would be strictly worse
+        # than the missing attribution rows.
+        _LOGGER.exception("post-run Module G safety net failed")
+        progress_log("ERROR", f"post-run Module G safety net failed: {err}")
+
+    return outcome, status, reason
 
 
 async def _default_session_runner(session: ManagedAgentsSession, kickoff: str) -> SessionOutcome:
     return await session.run(kickoff)
 
 
-def _inject_system_prompt_override(session: ManagedAgentsSession, system_prompt: str) -> None:
-    """Swap the system-prompt builder on an existing session.
-
-    Phase 5B uses a short smoke-mode prompt (see
-    `lucid.orchestrator.smoke`). Phase 7 will replace this hook with a
-    proper `SystemPromptProvider` config kwarg once a third caller
-    shows up.
-    """
-
-    def _create_agent_with_override() -> str:
-        agent = session.client.beta.agents.create(
-            name=f"lucid-orchestrator-{session.config.run_id[:8]}",
-            model=session.config.orchestrator_model,
-            system=system_prompt,
-            tools=session.registry.as_agent_tools(),
-        )
-        return str(agent.id)
-
-    session.create_agent = _create_agent_with_override  # type: ignore[method-assign]
-
-
 __all__ = [
+    "DEFAULT_REPORT_DIR",
     "AuditInputs",
     "AuditResult",
     "LockHeldError",
     "RunError",
+    "generate_run_id",
     "run_audit",
 ]

@@ -86,6 +86,11 @@ class HeartbeatMonitor:
         self._clock = clock or time
         self._last_seen: float = self._clock.monotonic()  # type: ignore[attr-defined]
 
+    @property
+    def stall_seconds(self) -> float:
+        """Seconds of silence that counts as ``is_stalled``."""
+        return self._stall_seconds
+
     def poke(self) -> None:
         """Mark that an event was just received."""
         self._last_seen = self._clock.monotonic()  # type: ignore[attr-defined]

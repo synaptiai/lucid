@@ -22,11 +22,16 @@ import os
 import sys
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 from rich.console import Console
 from rich.table import Table
+
+if TYPE_CHECKING:  # pragma: no cover
+    from anthropic import Anthropic, AsyncAnthropic
+
+    from lucid.modules.embeddings import EmbeddingProvider
 
 # Load .env.local / .env into os.environ at import time so the CLI picks up
 # API keys without requiring the user to shell-export them. config.load_settings
@@ -47,17 +52,15 @@ from lucid.cost import (  # noqa: E402
     make_anthropic_counter,
 )
 from lucid.ingest.base import IngestError, fingerprint_corpus  # noqa: E402
-from lucid.ingest.claude_ai import ClaudeAiAdapter  # noqa: E402
+from lucid.ingest.claude_ai import ClaudeAiAdapter, parse_memory_file  # noqa: E402
 from lucid.ingest.claude_code import ClaudeCodeAdapter  # noqa: E402
 from lucid.logging import configure_logging  # noqa: E402
-from lucid.orchestrator.smoke import (  # noqa: E402
-    SMOKE_KICKOFF_MESSAGE,
-    SMOKE_PROMPT_VERSION,
-    SMOKE_SYSTEM_PROMPT,
-)
-from lucid.run import AuditInputs, LockHeldError, run_audit  # noqa: E402
+from lucid.orchestrator.system_prompt import SYSTEM_PROMPT  # noqa: E402
+from lucid.run import AuditInputs, LockHeldError, generate_run_id, run_audit  # noqa: E402
 from lucid.sampling import SamplingConfig, sample_conversations  # noqa: E402
 from lucid.schemas import Conversation, ModuleName, Source, Turn  # noqa: E402
+from lucid.store import initialize_db  # noqa: E402
+from lucid.store.sqlite import CorpusStore  # noqa: E402
 
 app = typer.Typer(
     name="lucid",
@@ -275,18 +278,28 @@ def audit(
         authorized_budget_usd=authorized_budget,
     )
 
-    # Phase 5B smoke kickoff. Phase 7 swaps to SYSTEM_PROMPT + audit-workflow kickoff.
-    prompt_versions: dict[ModuleName, str] = {}
+    prompt_versions = _collect_prompt_versions(enabled)
+    allow_module_d = ModuleName.D_PERSPECTIVE in enabled
 
     data_dir = Path(".lucid")
     try:
-        client = _anthropic_client_or_exit()
+        sync_client, async_client = _build_anthropic_clients_or_exit()
     except ImportError as err:
         _CONSOLE.print(f"[red]Anthropic SDK not installed:[/red] {err}")
         raise typer.Exit(EXIT_USAGE) from err
+    embedding_provider = _build_embedding_provider_or_warn()
+
+    # memories.json (Claude.ai exports only) seeds Module H. Persist
+    # before run_audit so the dispatcher can read it inside the session.
+    memories_persisted = _persist_memories_for_sources(data_dir, source_paths)
+    if memories_persisted:
+        _CONSOLE.print(f"[dim]Loaded {memories_persisted} memory file(s) for Module H.[/dim]")
+
+    run_id = generate_run_id()
+    kickoff_message = _build_kickoff_message(run_id=run_id, inputs=inputs)
 
     _CONSOLE.print(
-        f"[cyan]Launching Managed Agents session (Phase 5B smoke). "
+        f"[cyan]Launching Managed Agents session for {run_id}. "
         f"Budget ceiling: ${authorized_budget:.2f}. This will cost real money.[/cyan]"
     )
 
@@ -297,11 +310,15 @@ def audit(
         result = run_audit(
             inputs=inputs,
             data_dir=data_dir,
-            client=client,
-            system_prompt=SMOKE_SYSTEM_PROMPT,
-            kickoff_message=SMOKE_KICKOFF_MESSAGE,
+            client=sync_client,
+            async_client=async_client,
+            embedding_provider=embedding_provider,
+            allow_module_d=allow_module_d,
+            system_prompt=SYSTEM_PROMPT,
+            kickoff_message=kickoff_message,
             prompt_versions=prompt_versions,
             progress_log=_progress,
+            run_id=run_id,
         )
     except LockHeldError as err:
         _CONSOLE.print(f"[red]Lock held:[/red] {err}")
@@ -318,10 +335,10 @@ def audit(
             f"cache_read_tokens={outcome.cache_read_tokens} "
             f"cache_write_tokens={outcome.cache_write_tokens}[/dim]"
         )
+    if result.report_path is not None:
+        _CONSOLE.print(f"[green]Report:[/green] {result.report_path}")
     if result.status != "completed":
         raise typer.Exit(EXIT_USAGE)
-
-    _ = SMOKE_PROMPT_VERSION  # exported for future prompt-version tracking
 
 
 @app.command()
@@ -819,12 +836,24 @@ def _build_counter() -> TokenCounter:
     return make_anthropic_counter(Anthropic(api_key=key))
 
 
-def _anthropic_client_or_exit() -> object:
-    """Return a sync `anthropic.Anthropic()` client or raise typer.Exit.
+def _build_anthropic_clients_or_exit() -> tuple[Anthropic, AsyncAnthropic]:
+    """Return ``(sync_client, async_client)`` or raise ``typer.Exit``.
 
-    Use for code paths that drive the sync API (Phase 5 Managed Agents
-    smoke runs via :mod:`lucid.run`). Async call paths (Module A
-    calibration) should use :func:`_async_anthropic_client_or_exit`.
+    Lucid needs both shapes for one audit:
+
+    * **Sync** ``Anthropic()`` drives :class:`ManagedAgentsSession` —
+      the SDK's ``beta.agents.create`` / ``events.send`` /
+      ``events.stream`` surface is synchronous and the driver bridges
+      to async internally.
+    * **Async** ``AsyncAnthropic()`` is handed to every detection
+      module so ``await client.messages.create(...)`` runs as a real
+      coroutine. Passing a sync client to an ``await`` site does not
+      raise — it returns a coroutine-like object that, when awaited,
+      executes a blocking HTTP call on the event loop. Visibly this
+      looks like a hang (0% CPU, one open socket, no log output). The
+      separate async client prevents this entire failure mode.
+
+    A single :envvar:`ANTHROPIC_API_KEY` covers both clients.
     """
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
@@ -832,9 +861,158 @@ def _anthropic_client_or_exit() -> object:
             "[red]ANTHROPIC_API_KEY is not set. Set it in .env.local or export it.[/red]"
         )
         raise typer.Exit(EXIT_USAGE)
-    from anthropic import Anthropic
+    from anthropic import Anthropic, AsyncAnthropic
 
-    return Anthropic(api_key=key)
+    return Anthropic(api_key=key), AsyncAnthropic(api_key=key, timeout=120.0)
+
+
+def _build_embedding_provider_or_warn() -> EmbeddingProvider | None:
+    """Build a :class:`VoyageEmbeddingProvider` if ``VOYAGE_API_KEY`` is
+    set, otherwise return ``None`` and tell the user Module H is
+    skipped.
+
+    Module H is the only consumer; without an embedding provider the
+    dispatcher returns ``no_embedding_provider`` and the audit
+    proceeds with the other modules.
+    """
+    key = os.environ.get("VOYAGE_API_KEY")
+    if not key:
+        _CONSOLE.print(
+            "[yellow]VOYAGE_API_KEY not set; Module H "
+            "(memory-corpus consistency) will be skipped.[/yellow]"
+        )
+        return None
+    from lucid.modules.embeddings import VoyageEmbeddingProvider
+
+    return VoyageEmbeddingProvider(api_key=key)
+
+
+def _persist_memories_for_sources(data_dir: Path, source_paths: dict[Source, Path]) -> int:
+    """Parse and persist ``memories.json`` for every Claude.ai source.
+
+    Returns the count of memory files persisted (zero on Claude Code
+    paths or if no memories.json is present). Module H reads from the
+    ``memory_files`` table during the audit; without this step Module
+    H produces no findings even when a real export is supplied.
+
+    Persistence is incremental — re-running an audit on the same DB
+    skips already-persisted files (the table is keyed by
+    ``account_uuid``).
+    """
+    persisted = 0
+    db_path = data_dir / "lucid.sqlite3"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    initialize_db(db_path)
+
+    with CorpusStore(db_path) as store:
+        existing_uuids = {
+            row["account_uuid"] for row in store.fetchall("SELECT account_uuid FROM memory_files")
+        }
+        for source, path in source_paths.items():
+            if source is not Source.CLAUDE_AI:
+                continue
+            memories_path = path / "memories.json"
+            if not memories_path.is_file():
+                continue
+            try:
+                memory_file = parse_memory_file(memories_path)
+            except IngestError as err:
+                _CONSOLE.print(f"[yellow]Skipping {memories_path}:[/yellow] {err}")
+                continue
+            if memory_file.account_uuid in existing_uuids:
+                continue
+            store.insert_memory_file(memory_file)
+            existing_uuids.add(memory_file.account_uuid)
+            persisted += 1
+    return persisted
+
+
+def _build_kickoff_message(*, run_id: str, inputs: AuditInputs) -> str:
+    """Compose the orchestrator kickoff message.
+
+    Not cache-stable across runs — ``run_id`` is baked in — but the
+    orchestrator system prompt is. The kickoff is a short, throwaway
+    message; only the system prompt benefits from the 1-hour cache TTL.
+    """
+    enabled_letters = ", ".join(sorted(m.value for m in inputs.enabled_modules))
+    sample_n = len(inputs.sampled)
+    preview_count = min(sample_n, 10)
+    preview = ", ".join(c.id for c in inputs.sampled[:preview_count])
+    overflow = sample_n - preview_count
+    if overflow:
+        preview += f", ... (+{overflow} more)"
+    return (
+        f"Begin audit run {run_id}.\n\n"
+        f"Corpus: {sample_n} sampled conversations.\n"
+        f"Enabled modules: {enabled_letters}.\n"
+        f"Budget ceiling: ${inputs.authorized_budget_usd:.2f}.\n"
+        f"Sample id preview: {preview or '<none>'}\n\n"
+        "Follow the workflow in your system prompt. Start with `query_corpus`\n"
+        "to confirm the corpus contents, invoke each enabled module once with\n"
+        "the full conversation_ids list, then call invoke_module(G) last and\n"
+        "conclude with a one-line summary.\n"
+    )
+
+
+def _module_primary_prompt_version(module: ModuleName) -> str:
+    """Return the primary judge-prompt version for ``module``.
+
+    For multi-prompt modules (B, E, F, H) this is the version of the
+    prompt whose findings actually land in the report. Sub-prompt
+    versions (Module B's extract pass, Module E's topics pass, …)
+    are tracked inside their module files; the audit-run column is
+    a coarse pointer to "which version of the framework did I use",
+    not a complete inventory.
+    """
+    match module:
+        case ModuleName.A_SPIRALBENCH:
+            from lucid.modules.module_a_spiralbench import PROMPT_VERSION
+
+            return PROMPT_VERSION
+        case ModuleName.B_SHARMA:
+            from lucid.modules.module_b_sharma import FEEDBACK_PROMPT_VERSION
+
+            return FEEDBACK_PROMPT_VERSION
+        case ModuleName.C_SYCEVAL:
+            from lucid.modules.module_c_syceval import PROMPT_VERSION
+
+            return PROMPT_VERSION
+        case ModuleName.D_PERSPECTIVE:
+            from lucid.modules.module_d_perspective import PROMPT_VERSION
+
+            return PROMPT_VERSION
+        case ModuleName.E_BELIEFSHIFT:
+            from lucid.modules.module_e_beliefshift import DRIFT_PROMPT_VERSION
+
+            return DRIFT_PROMPT_VERSION
+        case ModuleName.F_ITP:
+            from lucid.modules.module_f_itp import CLASSIFY_PROMPT_VERSION
+
+            return CLASSIFY_PROMPT_VERSION
+        case ModuleName.G_ATTRIBUTION:
+            from lucid.modules.module_g_attribution import PROMPT_VERSION
+
+            return PROMPT_VERSION
+        case ModuleName.H_MEMORY:
+            from lucid.modules.module_h_memory import CLASSIFY_PROMPT_VERSION
+
+            return CLASSIFY_PROMPT_VERSION
+
+
+def _collect_prompt_versions(enabled: list[ModuleName]) -> dict[ModuleName, str]:
+    """Recorded on ``audit_runs.prompt_versions_json`` for
+    calibration reproducibility.
+
+    Module G's version is always pinned because it runs as a
+    post-session safety net even when not in the user's ``enabled``
+    set.
+    """
+    versions = {module: _module_primary_prompt_version(module) for module in enabled}
+    if ModuleName.G_ATTRIBUTION not in versions:
+        versions[ModuleName.G_ATTRIBUTION] = _module_primary_prompt_version(
+            ModuleName.G_ATTRIBUTION
+        )
+    return versions
 
 
 def _async_anthropic_client_or_exit() -> object:

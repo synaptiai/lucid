@@ -51,6 +51,7 @@ from lucid.store.sqlite import CorpusStore
 if TYPE_CHECKING:
     from anthropic import AsyncAnthropic
 
+    from lucid.cost import CostEstimate
     from lucid.modules.embeddings import EmbeddingProvider
 
 _LOGGER = logging.getLogger(__name__)
@@ -346,6 +347,61 @@ async def _run_module(
     raise ValueError(f"unsupported module: {module_enum}")
 
 
+async def run_attribution_safety_net(
+    *,
+    store: CorpusStore,
+    audit_run_id: str,
+    conversation_ids: Sequence[str],
+) -> tuple[int, int, list[dict[str, Any]]]:
+    """Run Module G directly and persist its findings.
+
+    Used by :func:`lucid.run.run_audit` after the orchestrator session
+    ends to guarantee attribution findings exist even if Sonnet 4.6
+    skipped ``invoke_module(G)`` under token pressure. Deterministic
+    (no LLM call), idempotent — a second run surfaces every finding
+    as an ``idempotent_skips`` collision against the UNIQUE key.
+
+    Writes a :class:`~lucid.schemas.ModuleProgress` row to the
+    ``module_progress`` table so resume tooling can see the safety
+    net ran (or failed) without inspecting the findings table.
+
+    Returns ``(stored, idempotent_skips, errors)`` matching the
+    :func:`_persist_findings` tuple shape.
+    """
+    from lucid.modules.module_g_attribution import ModuleGAttribution
+
+    if not conversation_ids:
+        # Empty corpus — no work to do, no progress row needed.
+        return 0, 0, []
+
+    store.mark_module_started(audit_run_id, ModuleName.G_ATTRIBUTION)
+    try:
+        corpus = _load_module_corpus(store, audit_run_id, conversation_ids)
+        results = await ModuleGAttribution().run(corpus)
+    except Exception as err:
+        store.mark_module_finished(
+            audit_run_id,
+            ModuleName.G_ATTRIBUTION,
+            status="failed",
+            error_message=str(err)[:500],
+        )
+        raise
+
+    stored, idempotent, errors = _persist_findings(store, results)
+    summary = (
+        f"{len(errors)} per-conversation error(s); first: {errors[0]['error_type']}"
+        if errors
+        else None
+    )
+    store.mark_module_finished(
+        audit_run_id,
+        ModuleName.G_ATTRIBUTION,
+        status="completed",
+        error_message=summary,
+    )
+    return stored, idempotent, errors
+
+
 def _persist_findings(
     store: CorpusStore,
     results: Sequence[ModuleResult],
@@ -400,6 +456,7 @@ def build_tool_registry(
     anthropic_client: AsyncAnthropic | None = None,
     allow_module_d: bool = False,
     embedding_provider: EmbeddingProvider | None = None,
+    cost_estimate: CostEstimate | None = None,
 ) -> ToolRegistry:
     """Wire up the 8 custom tools for a given audit run.
 
@@ -420,6 +477,16 @@ def build_tool_registry(
     consistency) for corpus chunk indexing and per-claim retrieval.
     When ``None``, Module H returns ``no_embedding_provider`` — the
     orchestrator logs and continues, rather than crashing the audit.
+
+    `cost_estimate` is the pre-flight :class:`~lucid.cost.CostEstimate`
+    produced by ``CostEstimator.estimate``. When provided, ``invoke_module``
+    increments ``spend_tracker["accrued_usd"]`` by the matching
+    per-module upper bound after the module completes successfully —
+    enough to make ``estimate_remaining_cost`` reflect actual progress
+    without threading per-call ``response.usage`` through every module's
+    retry loop. Each module is debited at most once per registry; a
+    second successful invocation of the same module reuses the budget
+    line and does not double-charge.
     """
     if progress_log is None:
 
@@ -430,6 +497,17 @@ def build_tool_registry(
 
     # Mutable close-over for the running cost tally.
     spend_tracker = {"accrued_usd": 0.0, "budget_usd": remaining_budget_usd}
+
+    # Per-module USD upper bounds from the pre-flight estimate. ``None``
+    # entries mean "no estimate seen for this module" — typically the
+    # estimate covers the modules in the user's --enabled set; modules
+    # invoked outside that set (rare) accrue no spend.
+    per_module_usd: dict[ModuleName, float] = (
+        {mc.module: mc.usd for mc in cost_estimate.per_module} if cost_estimate else {}
+    )
+    # Track which modules have already been debited so a second
+    # invocation (resume / orchestrator retry) does not double-charge.
+    debited_modules: set[ModuleName] = set()
 
     registry = ToolRegistry()
 
@@ -591,38 +669,49 @@ def build_tool_registry(
         try:
             module_enum = ModuleName(module_name)
         except ValueError:
+            # No module_progress row written: an unknown module name is
+            # an orchestrator bug, not part of any planned module's
+            # lifecycle.
             return {"error": "unknown_module", "module": module_name}
 
         # Module D is opt-in.
         if module_enum is ModuleName.D_PERSPECTIVE and not allow_module_d:
+            skip_message = (
+                "Module D is opt-in; start the audit with --include-module-d to enable it."
+            )
             progress_log(
                 "INFO",
                 f"invoke_module(D) called without --include-module-d; "
                 f"skipping over {len(conv_ids)} conversations.",
             )
+            store.mark_module_finished(
+                audit_run_id, module_enum, status="skipped", error_message=skip_message
+            )
             return {
                 "module": module_name,
                 "status": "skipped",
-                "message": (
-                    "Module D is opt-in; start the audit with --include-module-d to enable it."
-                ),
+                "message": skip_message,
             }
 
         # Module H requires an embedding provider in addition to the client.
         if module_enum is ModuleName.H_MEMORY and embedding_provider is None:
+            skip_message = (
+                "Module H requires an embedding provider (Voyage AI). "
+                "Ensure VOYAGE_API_KEY is set or an EmbeddingProvider is "
+                "injected into the tool registry."
+            )
             progress_log(
                 "WARNING",
                 "invoke_module(H) called without embedding_provider; skipping. "
                 "Module H requires Voyage or an equivalent EmbeddingProvider.",
             )
+            store.mark_module_finished(
+                audit_run_id, module_enum, status="skipped", error_message=skip_message
+            )
             return {
                 "module": module_name,
                 "status": "no_embedding_provider",
-                "message": (
-                    "Module H requires an embedding provider (Voyage AI). "
-                    "Ensure VOYAGE_API_KEY is set or an EmbeddingProvider is "
-                    "injected into the tool registry."
-                ),
+                "message": skip_message,
             }
 
         # LLM-backed modules need a client.
@@ -636,28 +725,40 @@ def build_tool_registry(
             ModuleName.H_MEMORY,
         }
         if module_enum in llm_modules and anthropic_client is None:
+            skip_message = (
+                "anthropic_client not injected into tool registry; this "
+                "happens on --dry-run and when ANTHROPIC_API_KEY is unset. "
+                "Run a real audit with a valid key to execute this module."
+            )
             progress_log(
                 "WARNING",
                 f"invoke_module({module_name}) called without anthropic_client; "
                 "skipping module run.",
             )
+            store.mark_module_finished(
+                audit_run_id, module_enum, status="skipped", error_message=skip_message
+            )
             return {
                 "module": module_name,
                 "status": "no_client",
-                "message": (
-                    "anthropic_client not injected into tool registry; this "
-                    "happens on --dry-run and when ANTHROPIC_API_KEY is unset. "
-                    "Run a real audit with a valid key to execute this module."
-                ),
+                "message": skip_message,
             }
+
+        # Real run begins here. Mark started before the corpus load so
+        # a corpus-load failure still leaves a ``failed`` row behind.
+        store.mark_module_started(audit_run_id, module_enum)
 
         try:
             corpus = _load_module_corpus(store, audit_run_id, conv_ids)
         except Exception as err:
+            err_message = str(err)[:500]
+            store.mark_module_finished(
+                audit_run_id, module_enum, status="failed", error_message=err_message
+            )
             return {
                 "error": "corpus_load_failed",
                 "module": module_name,
-                "message": str(err)[:500],
+                "message": err_message,
             }
 
         progress_log(
@@ -675,13 +776,45 @@ def build_tool_registry(
                 embedding_provider=embedding_provider,
             )
         except Exception as err:
+            err_message = str(err)[:500]
+            store.mark_module_finished(
+                audit_run_id, module_enum, status="failed", error_message=err_message
+            )
             return {
                 "error": "module_run_failed",
                 "module": module_name,
-                "message": str(err)[:500],
+                "message": err_message,
             }
 
         stored, idempotent, module_errors = _persist_findings(store, results)
+
+        # Debit the pre-flight upper bound once the module actually ran.
+        # We use the upper-bound estimate instead of live usage totals
+        # because modules don't bubble up per-call ``response.usage`` —
+        # see the M1 note in the CLAUDE.md wiring plan. Missing
+        # estimates simply skip the debit silently.
+        estimated_usd = per_module_usd.get(module_enum)
+        if estimated_usd is not None and module_enum not in debited_modules:
+            spend_tracker["accrued_usd"] = round(
+                spend_tracker["accrued_usd"] + float(estimated_usd), 6
+            )
+            debited_modules.add(module_enum)
+
+        # Per-conversation errors don't flip the status to ``failed`` —
+        # they are partial-pass diagnostics, mirrored into
+        # ``error_message`` so resume / triage tooling can see them.
+        completion_summary = (
+            f"{len(module_errors)} per-conversation error(s); "
+            f"first: {module_errors[0]['error_type']}"
+            if module_errors
+            else None
+        )
+        store.mark_module_finished(
+            audit_run_id,
+            module_enum,
+            status="completed",
+            error_message=completion_summary,
+        )
 
         progress_log(
             "INFO",
@@ -893,12 +1026,6 @@ def build_tool_registry(
             handler=estimate_remaining_cost,
         )
     )
-
-    # Expose the spend tracker so the orchestrator event loop can nudge it
-    # after each module run (Phase 7).
-    registry.tools["_spend_tracker"] = None  # type: ignore[assignment]
-    del registry.tools["_spend_tracker"]
-    registry.__dict__["spend_tracker"] = spend_tracker
 
     return registry
 

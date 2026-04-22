@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from lucid.cost import CostEstimate, ModuleCost
 from lucid.orchestrator.tools import build_tool_registry, to_tool_result_content
-from lucid.schemas import Conversation, Role, Source, TextBlock, Turn
+from lucid.schemas import Conversation, ModuleName, Role, Source, TextBlock, Turn
 from lucid.store import initialize_db
 from lucid.store.sqlite import CorpusStore
 
@@ -563,6 +564,402 @@ async def test_estimate_remaining_cost_uses_budget(tmp_path: Path) -> None:
     assert result["budget_usd"] == 5.0
     assert result["accrued_usd"] == 0.0
     assert result["remaining_usd"] == 5.0
+    store.close()
+
+
+# ----- spend_tracker increment after invoke_module (M1) ---------------
+
+
+def _cost_estimate_for(module: ModuleName, usd: float) -> CostEstimate:
+    """A minimal :class:`CostEstimate` with one module priced at ``usd``."""
+    return CostEstimate(
+        per_module=(
+            ModuleCost(
+                module=module,
+                model="claude-opus-4-7",
+                input_tokens=100,
+                cached_input_tokens=80,
+                output_tokens=20,
+                usd=usd,
+            ),
+        ),
+        total_usd=usd,
+        conversations=1,
+    )
+
+
+async def test_invoke_module_g_increments_spend_tracker_from_estimate(
+    tmp_path: Path,
+) -> None:
+    """After Module G runs, ``estimate_remaining_cost`` reflects the
+    debited per-module USD upper bound from the pre-flight estimate.
+
+    Module G's real estimated cost is $0.00, so the test injects a
+    non-zero amount to make the increment observable.
+    """
+    store, run_id = _seed_store(tmp_path)
+    estimate = _cost_estimate_for(ModuleName.G_ATTRIBUTION, usd=0.42)
+    registry = build_tool_registry(
+        store=store,
+        audit_run_id=run_id,
+        remaining_budget_usd=10.0,
+        cost_estimate=estimate,
+    )
+
+    invoke_result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "G", "conversation_ids": ["c-1"]}
+    )
+    assert invoke_result["status"] == "completed"
+
+    cost = await registry.get("estimate_remaining_cost").handler({})  # type: ignore[union-attr]
+    assert cost["accrued_usd"] == pytest.approx(0.42, abs=1e-6)
+    assert cost["remaining_usd"] == pytest.approx(10.0 - 0.42, abs=1e-6)
+    store.close()
+
+
+async def test_invoke_module_does_not_double_charge_on_second_run(
+    tmp_path: Path,
+) -> None:
+    """A second successful invocation of the same module reuses the
+    budget line — the orchestrator's resume / retry path must not
+    accrue spend twice."""
+    store, run_id = _seed_store(tmp_path)
+    estimate = _cost_estimate_for(ModuleName.G_ATTRIBUTION, usd=0.30)
+    registry = build_tool_registry(
+        store=store,
+        audit_run_id=run_id,
+        remaining_budget_usd=10.0,
+        cost_estimate=estimate,
+    )
+    handler = registry.get("invoke_module")
+    assert handler is not None
+    args = {"module": "G", "conversation_ids": ["c-1"]}
+    first = await handler.handler(args)
+    second = await handler.handler(args)
+    assert first["status"] == "completed"
+    assert second["status"] == "completed"
+
+    cost = await registry.get("estimate_remaining_cost").handler({})  # type: ignore[union-attr]
+    # The spend-tracker invariant: charged exactly once at $0.30,
+    # not $0.60, even though invoke_module ran twice. Finding-level
+    # idempotency (second["findings_stored"] == 0) is a separate
+    # contract tested by test_invoke_module_g_idempotent_on_second_call.
+    assert cost["accrued_usd"] == pytest.approx(0.30, abs=1e-6)
+    store.close()
+
+
+async def test_invoke_module_without_estimate_leaves_spend_at_zero(
+    tmp_path: Path,
+) -> None:
+    """If no ``cost_estimate`` is wired in, the spend tracker stays at
+    zero rather than crashing or guessing a value."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(
+        store=store,
+        audit_run_id=run_id,
+        remaining_budget_usd=5.0,
+        # cost_estimate omitted on purpose
+    )
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "G", "conversation_ids": ["c-1"]}
+    )
+    assert result["status"] == "completed"
+    cost = await registry.get("estimate_remaining_cost").handler({})  # type: ignore[union-attr]
+    assert cost["accrued_usd"] == 0.0
+    assert cost["remaining_usd"] == 5.0
+    store.close()
+
+
+async def test_invoke_module_skipped_status_does_not_charge(tmp_path: Path) -> None:
+    """A skipped module (D without opt-in) should not be debited; nothing ran."""
+    store, run_id = _seed_store(tmp_path)
+    estimate = _cost_estimate_for(ModuleName.D_PERSPECTIVE, usd=0.99)
+    registry = build_tool_registry(
+        store=store,
+        audit_run_id=run_id,
+        remaining_budget_usd=10.0,
+        cost_estimate=estimate,
+        # allow_module_d defaults to False — invocation should short-circuit.
+    )
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "D", "conversation_ids": ["c-1"]}
+    )
+    assert result["status"] == "skipped"
+    cost = await registry.get("estimate_remaining_cost").handler({})  # type: ignore[union-attr]
+    assert cost["accrued_usd"] == 0.0
+    store.close()
+
+
+# ----- module_progress writes from invoke_module (L1) ----------------
+
+
+async def test_invoke_module_g_writes_completed_module_progress(tmp_path: Path) -> None:
+    """End-to-end: a successful Module G invocation lands a
+    ``status='completed'`` row in ``module_progress`` with both
+    timestamps populated."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "G", "conversation_ids": ["c-1"]}
+    )
+    assert result["status"] == "completed"
+
+    progress = store.fetch_module_progress(run_id)
+    g = next((p for p in progress if p.module is ModuleName.G_ATTRIBUTION), None)
+    assert g is not None, progress
+    assert g.status == "completed"
+    assert g.started_at is not None
+    assert g.completed_at is not None
+    # No per-conversation errors → error_message stays NULL.
+    assert g.error_message is None
+    store.close()
+
+
+async def test_invoke_module_d_skipped_writes_skipped_module_progress(
+    tmp_path: Path,
+) -> None:
+    """Module D without ``--include-module-d`` short-circuits and must
+    still leave a ``skipped`` row so resume tooling can see the
+    decision was made (and not retry)."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "D", "conversation_ids": ["c-1"]}
+    )
+    assert result["status"] == "skipped"
+
+    progress = store.fetch_module_progress(run_id)
+    d = next((p for p in progress if p.module is ModuleName.D_PERSPECTIVE), None)
+    assert d is not None, progress
+    assert d.status == "skipped"
+    assert "include-module-d" in (d.error_message or "")
+    store.close()
+
+
+async def test_invoke_module_h_no_provider_writes_skipped_module_progress(
+    tmp_path: Path,
+) -> None:
+    """Module H without an embedding provider lands a ``skipped`` row
+    citing the missing dependency."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "H", "conversation_ids": ["c-1"]}
+    )
+    assert result["status"] == "no_embedding_provider"
+
+    progress = store.fetch_module_progress(run_id)
+    h = next((p for p in progress if p.module is ModuleName.H_MEMORY), None)
+    assert h is not None, progress
+    assert h.status == "skipped"
+    assert "embedding provider" in (h.error_message or "").lower()
+    store.close()
+
+
+async def test_invoke_module_no_client_writes_skipped_module_progress(
+    tmp_path: Path,
+) -> None:
+    """LLM-backed modules invoked without an Anthropic client land a
+    ``skipped`` row — the orchestrator can resume on a future run when
+    the key is set."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "A", "conversation_ids": ["c-1"]}
+    )
+    assert result["status"] == "no_client"
+
+    progress = store.fetch_module_progress(run_id)
+    a = next((p for p in progress if p.module is ModuleName.A_SPIRALBENCH), None)
+    assert a is not None, progress
+    assert a.status == "skipped"
+    assert "anthropic_client" in (a.error_message or "")
+    store.close()
+
+
+async def test_invoke_module_unknown_module_does_not_pollute_progress_table(
+    tmp_path: Path,
+) -> None:
+    """An unknown module name is an orchestrator bug, not part of any
+    planned module's lifecycle. No ``module_progress`` row should be
+    written — the schema's CHECK constraint would reject it anyway,
+    so a write attempt would crash the audit."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "Z", "conversation_ids": ["c-1"]}
+    )
+    assert result["error"] == "unknown_module"
+    progress = store.fetch_module_progress(run_id)
+    assert progress == []
+    store.close()
+
+
+async def test_invoke_module_run_failure_writes_failed_module_progress(
+    tmp_path: Path,
+) -> None:
+    """When the dispatcher's ``_run_module`` raises, the
+    ``module_progress`` row flips to ``failed`` with the truncated
+    exception message recorded so triage tooling can see why."""
+    from unittest.mock import patch
+
+    store, run_id = _seed_store(tmp_path)
+
+    async def _explode(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated module crash")
+
+    # Patch ``_run_module`` for the G branch so we don't need a real
+    # mocked LLM client — Module G is the only branch that runs without
+    # one and reaches ``_run_module``.
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    with patch("lucid.orchestrator.tools._run_module", side_effect=_explode):
+        result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+            {"module": "G", "conversation_ids": ["c-1"]}
+        )
+    assert result["error"] == "module_run_failed"
+
+    progress = store.fetch_module_progress(run_id)
+    g = next((p for p in progress if p.module is ModuleName.G_ATTRIBUTION), None)
+    assert g is not None, progress
+    assert g.status == "failed"
+    assert "simulated module crash" in (g.error_message or "")
+    store.close()
+
+
+async def test_run_attribution_safety_net_writes_module_progress(tmp_path: Path) -> None:
+    """The post-session helper :func:`run_attribution_safety_net`
+    leaves a ``module_progress`` row so resume tooling can tell the
+    safety net actually ran without inspecting the findings table."""
+    from lucid.orchestrator.tools import run_attribution_safety_net
+
+    store, run_id = _seed_store(tmp_path)
+    stored, _idempotent, errors = await run_attribution_safety_net(
+        store=store,
+        audit_run_id=run_id,
+        conversation_ids=["c-1"],
+    )
+    assert stored >= 1
+    assert errors == []
+
+    progress = store.fetch_module_progress(run_id)
+    g = next((p for p in progress if p.module is ModuleName.G_ATTRIBUTION), None)
+    assert g is not None
+    assert g.status == "completed"
+    store.close()
+
+
+async def test_run_attribution_safety_net_writes_no_progress_for_empty_corpus(
+    tmp_path: Path,
+) -> None:
+    """An empty corpus is a no-op: no row should be written, since
+    nothing actually ran. Avoids polluting resume views with phantom
+    ``completed`` entries."""
+    from lucid.orchestrator.tools import run_attribution_safety_net
+
+    store, run_id = _seed_store(tmp_path)
+    stored, idempotent, errors = await run_attribution_safety_net(
+        store=store,
+        audit_run_id=run_id,
+        conversation_ids=[],
+    )
+    assert (stored, idempotent, errors) == (0, 0, [])
+    assert store.fetch_module_progress(run_id) == []
+    store.close()
+
+
+async def test_run_attribution_safety_net_failure_writes_failed_row(
+    tmp_path: Path,
+) -> None:
+    """If the underlying Module G run raises, the safety net must
+    still leave a ``failed`` row and re-raise — losing the row would
+    break resume."""
+    from unittest.mock import patch
+
+    from lucid.orchestrator.tools import run_attribution_safety_net
+
+    store, run_id = _seed_store(tmp_path)
+
+    class _BoomModuleG:
+        async def run(self, _corpus: object) -> list[object]:
+            raise RuntimeError("attribution exploded")
+
+    with (
+        patch(
+            "lucid.modules.module_g_attribution.ModuleGAttribution",
+            return_value=_BoomModuleG(),
+        ),
+        pytest.raises(RuntimeError, match="attribution exploded"),
+    ):
+        await run_attribution_safety_net(store=store, audit_run_id=run_id, conversation_ids=["c-1"])
+
+    progress = store.fetch_module_progress(run_id)
+    g = next((p for p in progress if p.module is ModuleName.G_ATTRIBUTION), None)
+    assert g is not None
+    assert g.status == "failed"
+    assert "attribution exploded" in (g.error_message or "")
+    store.close()
+
+
+async def test_invoke_module_completion_summary_includes_first_error_type(
+    tmp_path: Path,
+) -> None:
+    """When per-conversation errors accumulate, the
+    ``module_progress.error_message`` column carries a count + the
+    first error type so triage doesn't need to grep findings logs.
+
+    Catches a regression where the f-string swaps ``errors[0]`` for
+    ``errors[-1]`` or breaks the count format.
+    """
+    from unittest.mock import patch
+
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    fake_errors = [
+        {"conversation_id": "c-1", "error_type": "TimeoutError", "message": "..."},
+        {"conversation_id": "c-2", "error_type": "ValueError", "message": "..."},
+    ]
+    with patch(
+        "lucid.orchestrator.tools._persist_findings",
+        return_value=(0, 0, fake_errors),
+    ):
+        result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+            {"module": "G", "conversation_ids": ["c-1"]}
+        )
+    assert result["status"] == "completed"
+
+    progress = store.fetch_module_progress(run_id)
+    g = next(p for p in progress if p.module is ModuleName.G_ATTRIBUTION)
+    assert g.status == "completed"
+    assert g.error_message == "2 per-conversation error(s); first: TimeoutError"
+    store.close()
+
+
+async def test_run_attribution_safety_net_summary_includes_first_error_type(
+    tmp_path: Path,
+) -> None:
+    """The safety net's completion summary mirrors invoke_module's:
+    same f-string shape, same ``error_message`` semantics, so resume
+    tooling sees identical structure regardless of which path
+    persisted the row."""
+    from unittest.mock import patch
+
+    from lucid.orchestrator.tools import run_attribution_safety_net
+
+    store, run_id = _seed_store(tmp_path)
+    fake_errors = [
+        {"conversation_id": "c-1", "error_type": "ConnectionResetError", "message": "..."},
+    ]
+    with patch(
+        "lucid.orchestrator.tools._persist_findings",
+        return_value=(0, 0, fake_errors),
+    ):
+        await run_attribution_safety_net(store=store, audit_run_id=run_id, conversation_ids=["c-1"])
+
+    progress = store.fetch_module_progress(run_id)
+    g = next(p for p in progress if p.module is ModuleName.G_ATTRIBUTION)
+    assert g.status == "completed"
+    assert g.error_message == "1 per-conversation error(s); first: ConnectionResetError"
     store.close()
 
 
