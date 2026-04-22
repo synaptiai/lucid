@@ -32,6 +32,7 @@ from pydantic import ValidationError
 
 from lucid.calibration.data import LabeledTurn
 from lucid.modules.base import ModuleCorpus
+from lucid.modules.base import extract_result_json as _extract_result_json
 from lucid.modules.module_a_spiralbench import (
     CHUNK_SIZE,
     PROMPT_VERSION,
@@ -238,46 +239,11 @@ class OllamaJudge:
         return SpiralBenchScore.model_validate_json(json_text)
 
 
-_RESULT_MARKER = re.compile(r"\bRESULT\b\s*", re.MULTILINE)
-_FENCE_OPEN = re.compile(r"^\s*```(?:json)?\s*\n", re.MULTILINE)
-_FENCE_CLOSE = re.compile(r"\n\s*```\s*$", re.MULTILINE)
-
-
-def _extract_result_json(content: str) -> str:
-    """Recover the JSON blob from a Spiral-Bench REASONING / RESULT response.
-
-    Handles (in priority order):
-
-    1. Content already parses cleanly as JSON — return as-is.
-    2. Content has a ``RESULT`` marker — take everything after it, strip
-       markdown fences, return.
-    3. Content has a top-level ``{ … }`` block — find the outermost brace
-       pair and return that.
-
-    Raises nothing; returns the best-effort candidate. Parsing failure
-    surfaces downstream as a ``ValidationError`` that the retry loop
-    handles.
-    """
-    stripped = content.strip()
-    if stripped.startswith("{") and stripped.endswith("}"):
-        return stripped
-
-    marker = _RESULT_MARKER.search(content)
-    if marker is not None:
-        rest = content[marker.end() :].strip()
-        rest = _FENCE_OPEN.sub("", rest, count=1)
-        rest = _FENCE_CLOSE.sub("", rest, count=1)
-        rest = rest.strip()
-        if rest:
-            return rest
-
-    # Last-resort: outermost {...} span
-    first = content.find("{")
-    last = content.rfind("}")
-    if first != -1 and last > first:
-        return content[first : last + 1].strip()
-
-    return stripped
+# ``_extract_result_json`` used to live here; it moved to
+# :mod:`lucid.modules.base` so other modules (A, C, D, …) can reuse it
+# without importing from the calibration tree. The module-level alias at
+# the top of this file keeps existing ``from … import _extract_result_json``
+# imports working.
 
 
 def _extract_content(response: Any) -> str:

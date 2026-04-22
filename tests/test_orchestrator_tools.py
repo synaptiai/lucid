@@ -140,13 +140,194 @@ async def test_get_turn_window_returns_slice(tmp_path: Path) -> None:
 # ----- invoke_module --------------------------------------------------
 
 
-async def test_invoke_module_stub_signals_not_implemented(tmp_path: Path) -> None:
+async def test_invoke_module_returns_no_client_without_anthropic(tmp_path: Path) -> None:
+    """When the registry is built without an anthropic_client, LLM-backed
+    modules return ``no_client`` so the orchestrator can log and continue
+    rather than crashing. Real audits inject the client."""
     store, run_id = _seed_store(tmp_path)
     registry = build_tool_registry(store=store, audit_run_id=run_id)
     result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
         {"module": "A", "conversation_ids": ["c-1"]}
     )
+    assert result["status"] == "no_client"
+    assert result["module"] == "A"
+    store.close()
+
+
+async def test_invoke_module_unknown_module_returns_error(tmp_path: Path) -> None:
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "Z", "conversation_ids": ["c-1"]}
+    )
+    assert result["error"] == "unknown_module"
+    store.close()
+
+
+async def test_invoke_module_d_skipped_without_opt_in(tmp_path: Path) -> None:
+    """Module D is opt-in; without ``allow_module_d`` the dispatcher
+    short-circuits with ``skipped`` and makes no LLM call."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "D", "conversation_ids": ["c-1"]}
+    )
+    assert result["status"] == "skipped"
+    assert "--include-module-d" in result["message"]
+    store.close()
+
+
+async def test_invoke_module_h_returns_not_implemented(tmp_path: Path) -> None:
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "H", "conversation_ids": ["c-1"]}
+    )
     assert result["status"] == "not_implemented"
+    assert "Phase 8" in result["message"]
+    store.close()
+
+
+async def test_invoke_module_g_runs_without_client(tmp_path: Path) -> None:
+    """Module G (attribution) is deterministic and does not require a
+    client; the dispatcher should run it end-to-end and persist findings."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "G", "conversation_ids": ["c-1"]}
+    )
+    assert result["status"] == "completed"
+    assert result["findings_stored"] >= 1
+    assert result["module_errors"] == []
+
+    # Verify the finding actually landed in the DB.
+    findings = await registry.get("get_findings").handler({"module": "G"})  # type: ignore[union-attr]
+    assert findings["count"] == result["findings_stored"]
+    store.close()
+
+
+async def test_invoke_module_g_idempotent_on_second_call(tmp_path: Path) -> None:
+    """Running Module G twice against the same conversation should leave
+    the findings count unchanged — the UNIQUE key blocks the second
+    insert and the dispatcher counts it as an idempotent collision, not
+    an error."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    first = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "G", "conversation_ids": ["c-1"]}
+    )
+    second = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "G", "conversation_ids": ["c-1"]}
+    )
+    assert first["findings_stored"] >= 1
+    assert second["findings_stored"] == 0
+    assert second["idempotent_skips"] == first["findings_stored"]
+    store.close()
+
+
+async def test_invoke_module_d_with_opt_in_still_skipped_without_client(
+    tmp_path: Path,
+) -> None:
+    """allow_module_d=True unlocks the opt-in gate, but Module D still
+    needs a client; without it the dispatcher returns ``no_client``."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(
+        store=store, audit_run_id=run_id, allow_module_d=True
+    )
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "D", "conversation_ids": ["c-1"]}
+    )
+    assert result["status"] == "no_client"
+    store.close()
+
+
+async def test_invoke_module_empty_corpus_still_succeeds(tmp_path: Path) -> None:
+    """Empty conversation_ids → empty corpus → module runs cleanly with
+    zero findings. This is the pre-flight-check shape the orchestrator
+    uses."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "G", "conversation_ids": []}
+    )
+    assert result["status"] == "completed"
+    assert result["findings_stored"] == 0
+    store.close()
+
+
+async def test_invoke_module_a_end_to_end_with_mocked_client(tmp_path: Path) -> None:
+    """End-to-end: dispatcher runs Module A with a mocked LLM, persists
+    findings to the store, and returns a completed status."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from anthropic.types import Usage
+
+    # Seed a longer conversation so Module A has a window to score.
+    store, run_id = _seed_store(tmp_path)
+    # Add a few more turns so there are ≥ 4 alternating turns (1 window).
+    store.insert_turns(
+        [
+            Turn(
+                id=f"extra-t-{i}",
+                conversation_id="c-1",
+                index=3 + i,
+                role=Role.USER if (3 + i) % 2 == 0 else Role.ASSISTANT,
+                content=f"extra turn {i}",
+                blocks=[TextBlock(text=f"x{i}")],
+            )
+            for i in range(3)
+        ]
+    )
+
+    # Build a mocked client that returns one SpiralBenchScore with a
+    # single pushback incident at turn_index=0 (the first assistant turn).
+    from lucid.modules.module_a_spiralbench import (
+        BehaviorIncident,
+        SpiralBenchIncidents,
+        SpiralBenchScore,
+    )
+
+    score = SpiralBenchScore(
+        reasoning="found one pushback incident",
+        incidents=SpiralBenchIncidents(
+            pushback=[
+                BehaviorIncident(snippet="let me push back", intensity=2, turn_index=0)
+            ]
+        ),
+    )
+
+    async def _call(**_kwargs: object) -> object:
+        block = MagicMock()
+        block.type = "text"
+        block.text = score.model_dump_json()
+        resp = MagicMock()
+        resp.content = [block]
+        resp.usage = Usage(
+            input_tokens=10,
+            output_tokens=5,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        )
+        return resp
+
+    client = MagicMock()
+    client.messages = MagicMock()
+    client.messages.create = AsyncMock(side_effect=_call)
+
+    registry = build_tool_registry(
+        store=store, audit_run_id=run_id, anthropic_client=client
+    )
+    result = await registry.get("invoke_module").handler(  # type: ignore[union-attr]
+        {"module": "A", "conversation_ids": ["c-1"]}
+    )
+
+    assert result["status"] == "completed", result
+    assert result["findings_stored"] >= 1
+    assert result["module_errors"] == []
+
+    # Verify the finding actually persisted.
+    persisted = await registry.get("get_findings").handler({"module": "A"})  # type: ignore[union-attr]
+    assert persisted["count"] == result["findings_stored"]
     store.close()
 
 

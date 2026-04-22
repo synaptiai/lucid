@@ -29,13 +29,27 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from lucid.schemas import Finding, ModuleName
+import orjson
+
+from lucid.modules.base import ModuleCorpus, ModuleError, ModuleResult
+from lucid.schemas import (
+    ContentBlock,
+    Conversation,
+    Finding,
+    ModuleName,
+    Role,
+    Source,
+    Turn,
+)
 from lucid.store.sqlite import CorpusStore
+
+if TYPE_CHECKING:
+    from anthropic import AsyncAnthropic
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -104,17 +118,292 @@ def _now() -> datetime:
     return datetime.now(tz=UTC)
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Module-run helpers (used by ``invoke_module``)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _row_to_conversation(row: Any) -> Conversation:
+    """Rehydrate a Conversation from a sqlite3.Row."""
+    return Conversation(
+        id=row["id"],
+        source=Source(row["source"]),
+        source_path=row["source_path"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+        model=row["model"],
+        title=row["title"],
+        summary=row["summary"],
+        turn_count=row["turn_count"],
+        project_slug=row["project_slug"],
+        metadata=orjson.loads(row["metadata_json"]) if row["metadata_json"] else {},
+    )
+
+
+def _row_to_turn(row: Any) -> Turn:
+    """Rehydrate a Turn from a sqlite3.Row.
+
+    ``blocks_json`` is stored as a JSON-serialized list of content blocks;
+    Pydantic's discriminator handles tagged-union reconstruction via
+    :class:`lucid.schemas.ContentBlock`.
+    """
+    from pydantic import TypeAdapter
+
+    blocks_adapter: TypeAdapter[list[ContentBlock]] = TypeAdapter(list[ContentBlock])
+    blocks_raw = orjson.loads(row["blocks_json"]) if row["blocks_json"] else []
+    blocks = blocks_adapter.validate_python(blocks_raw)
+    return Turn(
+        id=row["id"],
+        conversation_id=row["conversation_id"],
+        index=row["turn_index"],
+        role=Role(row["role"]),
+        content=row["content"],
+        blocks=blocks,
+        timestamp=(
+            datetime.fromisoformat(row["timestamp"]) if row["timestamp"] else None
+        ),
+        parent_message_uuid=row["parent_message_uuid"],
+        token_count=row["token_count"],
+    )
+
+
+def _load_module_corpus(
+    store: CorpusStore,
+    audit_run_id: str,
+    conversation_ids: Sequence[str],
+) -> ModuleCorpus:
+    """Hydrate a ``ModuleCorpus`` for the requested conversation_ids.
+
+    Raises if any id in ``conversation_ids`` is not present in the
+    store. Empty list produces an empty corpus — modules handle that
+    gracefully.
+    """
+    if not conversation_ids:
+        return ModuleCorpus(
+            conversations={},
+            turns_by_conversation={},
+            audit_run_id=audit_run_id,
+        )
+
+    placeholders = ",".join("?" for _ in conversation_ids)
+    conv_rows = store.fetchall(
+        f"SELECT id, source, source_path, created_at, updated_at, model, "
+        f"title, summary, turn_count, project_slug, metadata_json "
+        f"FROM conversations WHERE id IN ({placeholders}) "
+        f"ORDER BY updated_at ASC",
+        tuple(conversation_ids),
+    )
+    conversations: dict[str, Conversation] = {
+        row["id"]: _row_to_conversation(row) for row in conv_rows
+    }
+
+    turn_rows = store.fetchall(
+        f"SELECT id, conversation_id, turn_index, role, content, blocks_json, "
+        f"timestamp, parent_message_uuid, token_count "
+        f"FROM turns WHERE conversation_id IN ({placeholders}) "
+        f"ORDER BY conversation_id, turn_index ASC",
+        tuple(conversation_ids),
+    )
+    turns_by_conversation: dict[str, list[Turn]] = {cid: [] for cid in conversations}
+    for row in turn_rows:
+        conv_id = row["conversation_id"]
+        turns_by_conversation.setdefault(conv_id, []).append(_row_to_turn(row))
+
+    return ModuleCorpus(
+        conversations=conversations,
+        turns_by_conversation=turns_by_conversation,
+        audit_run_id=audit_run_id,
+    )
+
+
+def _load_findings(
+    store: CorpusStore,
+    audit_run_id: str,
+    conversation_ids: Sequence[str],
+) -> list[Finding]:
+    """Rehydrate Findings for this audit run, optionally scoped to
+    conversation_ids.
+
+    Used by Module C (FindingsModule) to read existing A/B sycophancy
+    events for second-pass classification.
+    """
+    params: list[Any] = [audit_run_id]
+    clause = "audit_run_id = ?"
+    if conversation_ids:
+        placeholders = ",".join("?" for _ in conversation_ids)
+        clause += f" AND conversation_id IN ({placeholders})"
+        params.extend(conversation_ids)
+
+    rows = store.fetchall(
+        f"SELECT id, audit_run_id, conversation_id, turn_ids_json, turn_ids_hash, "
+        f"module, behavior, intensity, confidence, confidence_alpha, "
+        f"confidence_beta, quote_user, quote_assistant, evidence_quotes_json, "
+        f"explanation, citation, detected_by_json, detected_at, prompt_version, "
+        f"prompt_hash, metadata_json FROM findings WHERE {clause}",
+        params,
+    )
+    findings: list[Finding] = []
+    for row in rows:
+        findings.append(
+            Finding(
+                id=row["id"],
+                audit_run_id=row["audit_run_id"],
+                conversation_id=row["conversation_id"],
+                turn_ids=orjson.loads(row["turn_ids_json"]) if row["turn_ids_json"] else [],
+                turn_ids_hash=row["turn_ids_hash"],
+                module=ModuleName(row["module"]),
+                behavior=row["behavior"],
+                intensity=row["intensity"],
+                confidence=row["confidence"],
+                confidence_alpha=row["confidence_alpha"],
+                confidence_beta=row["confidence_beta"],
+                quote_user=row["quote_user"],
+                quote_assistant=row["quote_assistant"],
+                evidence_quotes=(
+                    orjson.loads(row["evidence_quotes_json"])
+                    if row["evidence_quotes_json"]
+                    else []
+                ),
+                explanation=row["explanation"],
+                citation=row["citation"],
+                detected_by=orjson.loads(row["detected_by_json"]),
+                detected_at=datetime.fromisoformat(row["detected_at"]),
+                prompt_version=row["prompt_version"],
+                prompt_hash=row["prompt_hash"],
+                metadata=orjson.loads(row["metadata_json"]) if row["metadata_json"] else {},
+            )
+        )
+    return findings
+
+
+async def _run_module(
+    module_enum: ModuleName,
+    *,
+    corpus: ModuleCorpus,
+    store: CorpusStore,
+    audit_run_id: str,
+    anthropic_client: AsyncAnthropic | None,
+) -> list[ModuleResult]:
+    """Instantiate and run the detection module for ``module_enum``.
+
+    Deferred imports keep the registry's startup footprint small and
+    avoid a hard dependency on all module files for tools that only
+    need the store handlers (e.g. tests of ``query_corpus``).
+    """
+    if module_enum is ModuleName.A_SPIRALBENCH:
+        assert anthropic_client is not None
+        from lucid.modules.module_a_spiralbench import ModuleASpiralBench
+
+        return await ModuleASpiralBench(client=anthropic_client).run(corpus)
+
+    if module_enum is ModuleName.B_SHARMA:
+        assert anthropic_client is not None
+        from lucid.modules.module_b_sharma import ModuleBSharma
+
+        return await ModuleBSharma(opus_client=anthropic_client).run(corpus)
+
+    if module_enum is ModuleName.C_SYCEVAL:
+        assert anthropic_client is not None
+        from lucid.modules.module_c_syceval import ModuleCSycEval
+
+        conversation_ids = list(corpus.conversations.keys())
+        findings = _load_findings(store, audit_run_id, conversation_ids)
+        return await ModuleCSycEval(client=anthropic_client).run(corpus, findings)
+
+    if module_enum is ModuleName.D_PERSPECTIVE:
+        assert anthropic_client is not None
+        from lucid.modules.module_d_perspective import ModuleDPerspective
+
+        return await ModuleDPerspective(client=anthropic_client).run(corpus)
+
+    if module_enum is ModuleName.E_BELIEFSHIFT:
+        assert anthropic_client is not None
+        from lucid.modules.module_e_beliefshift import ModuleEBeliefShift
+
+        return await ModuleEBeliefShift(opus_client=anthropic_client).run(corpus)
+
+    if module_enum is ModuleName.F_ITP:
+        assert anthropic_client is not None
+        from lucid.modules.module_f_itp import ModuleFITP
+
+        return await ModuleFITP(opus_client=anthropic_client).run(corpus)
+
+    if module_enum is ModuleName.G_ATTRIBUTION:
+        from lucid.modules.module_g_attribution import ModuleGAttribution
+
+        return await ModuleGAttribution().run(corpus)
+
+    raise ValueError(f"unsupported module: {module_enum}")
+
+
+def _persist_findings(
+    store: CorpusStore,
+    results: Sequence[ModuleResult],
+) -> tuple[int, int, list[dict[str, Any]]]:
+    """Write every ``Finding`` result to the store; return (stored,
+    idempotent_collisions, module_errors).
+
+    ``idempotent_collisions`` counts findings whose insertion raised a
+    uniqueness error — that is the expected behaviour on resume / retry
+    and is not a failure. Other insertion errors surface via the return
+    value as individual ``module_errors`` entries so the orchestrator
+    can see them without aborting the module pass.
+    """
+    stored = 0
+    collisions = 0
+    errors: list[dict[str, Any]] = []
+
+    for result in results:
+        if isinstance(result, ModuleError):
+            errors.append(
+                {
+                    "conversation_id": result.conversation_id,
+                    "error_type": result.error_type,
+                    "message": result.message[:200],
+                }
+            )
+            continue
+        try:
+            store.insert_finding(result)
+            stored += 1
+        except Exception as err:
+            msg = str(err)
+            if "UNIQUE constraint failed" in msg or "integrity" in msg.lower():
+                collisions += 1
+            else:
+                errors.append(
+                    {
+                        "conversation_id": result.conversation_id,
+                        "error_type": f"insert:{type(err).__name__}",
+                        "message": msg[:200],
+                    }
+                )
+    return stored, collisions, errors
+
+
 def build_tool_registry(
     *,
     store: CorpusStore,
     audit_run_id: str,
     progress_log: Callable[[str, str], None] | None = None,
     remaining_budget_usd: float = 0.0,
+    anthropic_client: AsyncAnthropic | None = None,
+    allow_module_d: bool = False,
 ) -> ToolRegistry:
     """Wire up the 8 custom tools for a given audit run.
 
     `progress_log(level, message)` receives orchestrator heartbeats the
     CLI can pipe to the user. Defaults to `_LOGGER.info`.
+
+    `anthropic_client` is consumed by ``invoke_module`` when a detection
+    module needs LLM access (A, B, C, D, E, F). When ``None``, those
+    modules return a ``no_client`` status rather than running — useful
+    for dry-run exercises and for tests that don't want to instantiate
+    the SDK.
+
+    `allow_module_d` gates invocation of Module D (perspective
+    sycophancy), which is opt-in per the CLI's ``--include-module-d``
+    flag. When ``False``, invoking module D returns ``skipped``.
     """
     if progress_log is None:
 
@@ -280,18 +569,108 @@ def build_tool_registry(
 
     # ---- invoke_module -------------------------------------------
     async def invoke_module(args: dict[str, Any]) -> dict[str, Any]:
-        # Wired in Phase 7; Phase 5A returns a stub signalling "not yet".
-        module = args["module"]
+        module_name = args["module"]
         conv_ids = args.get("conversation_ids") or []
+
+        try:
+            module_enum = ModuleName(module_name)
+        except ValueError:
+            return {"error": "unknown_module", "module": module_name}
+
+        # Module D is opt-in.
+        if module_enum is ModuleName.D_PERSPECTIVE and not allow_module_d:
+            progress_log(
+                "INFO",
+                f"invoke_module(D) called without --include-module-d; "
+                f"skipping over {len(conv_ids)} conversations.",
+            )
+            return {
+                "module": module_name,
+                "status": "skipped",
+                "message": (
+                    "Module D is opt-in; start the audit with "
+                    "--include-module-d to enable it."
+                ),
+            }
+
+        # Module H lands in Phase 8.
+        if module_enum is ModuleName.H_MEMORY:
+            return {
+                "module": module_name,
+                "status": "not_implemented",
+                "message": "Module H (memory-corpus consistency) ships in Phase 8.",
+            }
+
+        # LLM-backed modules need a client.
+        llm_modules = {
+            ModuleName.A_SPIRALBENCH,
+            ModuleName.B_SHARMA,
+            ModuleName.C_SYCEVAL,
+            ModuleName.D_PERSPECTIVE,
+            ModuleName.E_BELIEFSHIFT,
+            ModuleName.F_ITP,
+        }
+        if module_enum in llm_modules and anthropic_client is None:
+            progress_log(
+                "WARNING",
+                f"invoke_module({module_name}) called without anthropic_client; "
+                "skipping module run.",
+            )
+            return {
+                "module": module_name,
+                "status": "no_client",
+                "message": (
+                    "anthropic_client not injected into tool registry; this "
+                    "happens on --dry-run and when ANTHROPIC_API_KEY is unset. "
+                    "Run a real audit with a valid key to execute this module."
+                ),
+            }
+
+        try:
+            corpus = _load_module_corpus(store, audit_run_id, conv_ids)
+        except Exception as err:
+            return {
+                "error": "corpus_load_failed",
+                "module": module_name,
+                "message": str(err)[:500],
+            }
+
         progress_log(
             "INFO",
-            f"invoke_module({module}) requested for {len(conv_ids)} conversations; "
-            f"Phase 7 wires real module execution.",
+            f"invoke_module({module_name}) running over {len(corpus.conversations)} "
+            f"conversations.",
         )
+
+        try:
+            results = await _run_module(
+                module_enum,
+                corpus=corpus,
+                store=store,
+                audit_run_id=audit_run_id,
+                anthropic_client=anthropic_client,
+            )
+        except Exception as err:
+            return {
+                "error": "module_run_failed",
+                "module": module_name,
+                "message": str(err)[:500],
+            }
+
+        stored, idempotent, module_errors = _persist_findings(store, results)
+
+        progress_log(
+            "INFO",
+            f"invoke_module({module_name}) completed: stored={stored}, "
+            f"idempotent_skips={idempotent}, module_errors={len(module_errors)}.",
+        )
+
         return {
-            "module": module,
-            "status": "not_implemented",
-            "message": "Phase 7 wires real module execution; this is a stub.",
+            "module": module_name,
+            "status": "completed",
+            "findings_stored": stored,
+            "idempotent_skips": idempotent,
+            "module_errors": module_errors[:10],
+            "module_errors_count": len(module_errors),
         }
 
     registry.register(

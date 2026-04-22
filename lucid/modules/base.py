@@ -25,6 +25,7 @@ entries before handing coroutines to the helper.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -37,6 +38,7 @@ __all__ = [
     "ModuleCorpus",
     "ModuleError",
     "ModuleResult",
+    "extract_result_json",
     "run_with_bounded_concurrency",
 ]
 
@@ -136,3 +138,48 @@ async def run_with_bounded_concurrency[T](
             return await coro
 
     return await asyncio.gather(*(_guarded(c) for c in coros))
+
+
+_RESULT_MARKER = re.compile(r"\bRESULT\b\s*", re.MULTILINE)
+_FENCE_OPEN = re.compile(r"^\s*```(?:json)?\s*\n", re.MULTILINE)
+_FENCE_CLOSE = re.compile(r"\n\s*```\s*$", re.MULTILINE)
+
+
+def extract_result_json(content: str) -> str:
+    """Recover the JSON blob from a Lucid module's two-section response.
+
+    Every Lucid module prompt asks the model to emit an optional
+    ``REASONING`` section followed by a ``RESULT`` section that contains a
+    single JSON object. Real model output drifts across three shapes we
+    have to tolerate:
+
+    1. Model returned bare JSON — already parses cleanly. Return as-is.
+    2. Model returned ``REASONING … RESULT\\n<json>`` with or without
+       markdown fences around the JSON. Strip everything up to and
+       including ``RESULT``, then peel fences.
+    3. Model returned prose plus a JSON blob somewhere inside. Locate the
+       outermost ``{ … }`` span and return that.
+
+    Raises nothing; returns the best-effort candidate. Downstream
+    ``model_validate_json`` surfacing a ``ValidationError`` is how the
+    module signals "model returned garbage" — the retry loop handles it.
+    """
+    stripped = content.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+
+    marker = _RESULT_MARKER.search(content)
+    if marker is not None:
+        rest = content[marker.end() :].strip()
+        rest = _FENCE_OPEN.sub("", rest, count=1)
+        rest = _FENCE_CLOSE.sub("", rest, count=1)
+        rest = rest.strip()
+        if rest:
+            return rest
+
+    first = content.find("{")
+    last = content.rfind("}")
+    if first != -1 and last > first:
+        return content[first : last + 1].strip()
+
+    return stripped

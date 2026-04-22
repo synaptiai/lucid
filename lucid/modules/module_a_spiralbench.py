@@ -423,7 +423,7 @@ class ModuleASpiralBench:
         the module emits a ModuleError for that window rather than
         re-querying the LLM indefinitely.
         """
-        from lucid.calibration.judges.ollama import _extract_result_json
+        from lucid.modules.base import extract_result_json
 
         transient_exceptions: tuple[type[BaseException], ...] = (
             asyncio.TimeoutError,
@@ -469,5 +469,5 @@ class ModuleASpiralBench:
                     break
         if not content:
             raise RuntimeError("messages.create returned no text content")
-        json_text = _extract_result_json(content)
+        json_text = extract_result_json(content)
         return SpiralBenchScore.model_validate_json(json_text)
