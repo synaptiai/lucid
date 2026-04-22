@@ -219,7 +219,13 @@ class OllamaJudge:
                 {"role": "system", "content": self._prompt.body},
                 {"role": "user", "content": _render_window(window)},
             ],
-            format=SpiralBenchScore.model_json_schema(),
+            # Module A's v1 prompt is authored around the Spiral-Bench
+            # rubric's REASONING / RESULT two-section format, which
+            # ``messages.parse`` on Anthropic handles transparently. Ollama
+            # has no equivalent; we let the model emit whichever shape the
+            # prompt asked for and post-process via ``_extract_result_json``.
+            # ``format='json'`` is omitted — it conflicts with the prompt's
+            # preamble and produces worse compliance in practice.
             options={"temperature": 0.0},
             stream=False,
         )
@@ -228,7 +234,50 @@ class OllamaJudge:
         content = _extract_content(response)
         if not content:
             raise ValueError("ollama response had no message content")
-        return SpiralBenchScore.model_validate_json(content)
+        json_text = _extract_result_json(content)
+        return SpiralBenchScore.model_validate_json(json_text)
+
+
+_RESULT_MARKER = re.compile(r"\bRESULT\b\s*", re.MULTILINE)
+_FENCE_OPEN = re.compile(r"^\s*```(?:json)?\s*\n", re.MULTILINE)
+_FENCE_CLOSE = re.compile(r"\n\s*```\s*$", re.MULTILINE)
+
+
+def _extract_result_json(content: str) -> str:
+    """Recover the JSON blob from a Spiral-Bench REASONING / RESULT response.
+
+    Handles (in priority order):
+
+    1. Content already parses cleanly as JSON — return as-is.
+    2. Content has a ``RESULT`` marker — take everything after it, strip
+       markdown fences, return.
+    3. Content has a top-level ``{ … }`` block — find the outermost brace
+       pair and return that.
+
+    Raises nothing; returns the best-effort candidate. Parsing failure
+    surfaces downstream as a ``ValidationError`` that the retry loop
+    handles.
+    """
+    stripped = content.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+
+    marker = _RESULT_MARKER.search(content)
+    if marker is not None:
+        rest = content[marker.end() :].strip()
+        rest = _FENCE_OPEN.sub("", rest, count=1)
+        rest = _FENCE_CLOSE.sub("", rest, count=1)
+        rest = rest.strip()
+        if rest:
+            return rest
+
+    # Last-resort: outermost {...} span
+    first = content.find("{")
+    last = content.rfind("}")
+    if first != -1 and last > first:
+        return content[first : last + 1].strip()
+
+    return stripped
 
 
 def _extract_content(response: Any) -> str:

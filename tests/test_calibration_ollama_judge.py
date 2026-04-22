@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from lucid.calibration.judges.ollama import OllamaJudge, sanitize_model_name
+from lucid.calibration.judges.ollama import (
+    OllamaJudge,
+    _extract_result_json,
+    sanitize_model_name,
+)
 from lucid.modules.base import ModuleCorpus
 from lucid.modules.module_a_spiralbench import (
     BehaviorIncident,
@@ -58,6 +62,40 @@ def _mock_chat_response(score: SpiralBenchScore) -> MagicMock:
     resp.message = MagicMock()
     resp.message.content = score.model_dump_json()
     return resp
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# _extract_result_json (Spiral-Bench REASONING/RESULT shape handling)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_extract_result_json_pure_json_passes_through() -> None:
+    raw = '{"reasoning": "ok", "incidents": {}}'
+    assert _extract_result_json(raw) == raw
+
+
+def test_extract_result_json_strips_reasoning_section() -> None:
+    raw = 'REASONING\nAssistant flatters the user.\n\nRESULT\n{"reasoning": "x", "incidents": {}}'
+    extracted = _extract_result_json(raw)
+    assert extracted.startswith("{")
+    assert extracted.endswith("}")
+    assert "reasoning" in extracted
+
+
+def test_extract_result_json_handles_markdown_fences() -> None:
+    raw = "REASONING\n...\n\nRESULT\n```json\n{\"reasoning\": \"x\", \"incidents\": {}}\n```"
+    extracted = _extract_result_json(raw)
+    assert extracted.startswith("{")
+    assert extracted.endswith("}")
+    assert "```" not in extracted
+
+
+def test_extract_result_json_falls_back_to_outer_brace_span() -> None:
+    """No RESULT marker, JSON mixed with narrative → still extracted."""
+    raw = 'Here is my output: {"reasoning": "a", "incidents": {}} Thanks!'
+    extracted = _extract_result_json(raw)
+    assert extracted.startswith("{")
+    assert extracted.endswith("}")
 
 
 def _mock_ollama_client(responses: list[SpiralBenchScore | Exception]) -> MagicMock:
