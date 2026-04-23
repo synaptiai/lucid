@@ -1,0 +1,1421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lucid — hackathon demo deck · {{ audit.id }}</title>
+<style>
+  /* ─────────────────────────────────────────────────────────────────
+     LUCID HACKATHON DECK — generator-driven companion to the report.
+     Aesthetic: cream paper editorial / Tufte intelligence brief.
+     Tokens, typography, and component grammar are LITERALLY the same
+     CSS variables as base.html.j2 — the deck reads as the same
+     publication, in slide form. System fonts only.
+     ───────────────────────────────────────────────────────────────── */
+
+  /* Design tokens — synced with base.html.j2 */
+  :root {
+    --bg: #f8f4ec;
+    --bg-card: #fefcf7;
+    --bg-deep: #efe8d9;
+    --rule: #d9d0bc;
+    --rule-soft: #e6dfce;
+    --ink: #14110d;
+    --ink-soft: #2c2823;
+    --slate: #4a5160;
+    --slate-soft: #8b8678;
+    --severity-high: #9b1c1c;
+    --severity-mid: #b45309;
+    --severity-low: #1d3a5e;
+    --positive: #2d5a3d;
+    --neutral: #8b8678;
+    --accent: #a64a2e;
+    --accent-soft: #d8a48c;
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont,
+                 "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue",
+                 Arial, sans-serif;
+    color: var(--ink);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+  }
+  .serif, h1, h2, h3, h4, .display {
+    font-family: ui-serif, "New York", Charter, "Source Serif Pro",
+                 "Iowan Old Style", "Apple Garamond", Georgia, serif;
+    font-feature-settings: "ss01", "ss02";
+  }
+  code, pre, .mono {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo,
+                 Consolas, monospace;
+    font-size: 0.86em;
+  }
+  em { font-style: italic; }
+  strong { font-weight: 600; }
+
+  /* ───── Slide framework ─────
+     Each <section.slide> is a viewport-locked page. Stack absolutely;
+     show one at a time via opacity + pointer-events. */
+  .deck {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  .slide {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    padding: clamp(2.4rem, 5.5vh, 4.4rem) clamp(2.6rem, 7vw, 6rem) clamp(3.6rem, 6vh, 4.6rem);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s var(--ease-out-quart);
+  }
+  .slide.active { opacity: 1; pointer-events: auto; }
+
+  /* Subtle paper vignette — same warmth as the report. */
+  .slide::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse at top right, rgba(255, 250, 240, 0.4), transparent 60%),
+      radial-gradient(ellipse at bottom left, rgba(166, 74, 46, 0.035), transparent 50%);
+    pointer-events: none;
+  }
+  /* Top oxide-red rule on every slide — matches report's lede top border. */
+  .slide::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 56px;
+    height: 4px;
+    background: var(--accent);
+  }
+
+  /* ───── Slide chrome — masthead + page numbers ───── */
+  .slide-masthead {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--slate);
+    font-weight: 700;
+    margin: 0 0 1.4rem;
+    padding-bottom: 0.55rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  .slide-masthead .mast-divider {
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+    margin: 0 0.3rem;
+  }
+  .slide-masthead .mast-volume {
+    font-family: ui-serif, Georgia, serif;
+    font-style: italic;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    color: var(--ink-soft);
+  }
+  .slide-chrome {
+    position: absolute;
+    bottom: 1.35rem;
+    left: clamp(2.6rem, 7vw, 6rem);
+    right: clamp(2.6rem, 7vw, 6rem);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--slate-soft);
+    z-index: 5;
+  }
+  .slide-chrome .runner {
+    font-family: ui-serif, Georgia, serif;
+    font-style: italic;
+    text-transform: none;
+    letter-spacing: 0.03em;
+    color: var(--slate);
+  }
+  .slide-chrome .pagenum { font-variant-numeric: tabular-nums; }
+  .slide-chrome .pagenum .total { color: var(--rule); margin-left: 0.3em; }
+
+  /* ───── Display typography (same scale as report's hero/lede) ───── */
+  .slide h1.display {
+    font-size: clamp(2.6rem, 7.2vw, 6.4rem);
+    line-height: 1.0;
+    margin: 0 0 1.1rem;
+    font-weight: 600;
+    letter-spacing: -0.018em;
+    color: var(--ink);
+  }
+  .slide h2.display {
+    font-size: clamp(1.9rem, 4.4vw, 3.4rem);
+    line-height: 1.08;
+    margin: 0 0 0.9rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .slide h3 {
+    font-size: clamp(1.1rem, 1.8vw, 1.55rem);
+    line-height: 1.3;
+    margin: 0 0 0.5rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .slide p { margin: 0.55rem 0; }
+
+  /* Drop cap on the cover/lede paragraphs — matches report .hero-headline. */
+  .drop-cap::first-letter {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 3.6em;
+    font-weight: 600;
+    float: left;
+    line-height: 0.85;
+    margin: 0.1em 0.12em 0 0;
+    color: var(--accent);
+  }
+
+  /* ───── Eyebrow — same as report ───── */
+  .eyebrow {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--slate);
+    font-weight: 600;
+    margin: 0 0 0.7rem;
+  }
+  .eyebrow .tick {
+    display: inline-block;
+    width: 14px; height: 1px;
+    background: var(--accent);
+    vertical-align: middle;
+    margin-right: 0.5rem;
+  }
+
+  /* ───── Sample-disclosure — copied verbatim from base.html.j2 ───── */
+  .sample-disclosure {
+    margin: 1rem 0 0;
+    padding: 0.65rem 0.95rem;
+    background: transparent;
+    border-left: 2px solid var(--rule);
+    font-size: 0.94rem;
+    color: var(--ink-soft);
+    line-height: 1.55;
+    max-width: 60ch;
+  }
+  .sample-disclosure .sd-line { margin: 0; }
+  .sample-disclosure .sd-label {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--slate);
+    font-weight: 700;
+    margin-right: 0.5rem;
+  }
+  .sample-disclosure strong { color: var(--ink); font-weight: 600; }
+  .sample-disclosure em {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-style: italic;
+    color: var(--severity-mid);
+  }
+
+  /* ───── Sidenote / marginalia — copied from base.html.j2 ───── */
+  .sidenote {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--ink);
+    padding: 0.95rem 1.15rem;
+    margin: 1.2rem 0 0;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    max-width: 62ch;
+  }
+  .sidenote .sn-title {
+    font-family: ui-serif, Georgia, serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0 0 0.35rem;
+    font-style: italic;
+  }
+
+  /* ───── Lede — copied from base.html.j2 (#1 finding feature) ───── */
+  .lede {
+    margin: 1.2rem 0 0;
+    padding: 1.4rem 1.7rem 1.25rem;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--severity-high);
+    position: relative;
+    max-width: 80ch;
+  }
+  .lede::before {
+    content: "№\00a001";
+    position: absolute;
+    top: -0.95rem;
+    left: 1.2rem;
+    background: var(--bg);
+    padding: 0 0.6rem;
+    font-family: ui-serif, Georgia, serif;
+    font-size: 0.78rem;
+    font-style: italic;
+    color: var(--severity-high);
+    letter-spacing: 0.06em;
+  }
+  .lede-eyebrow {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--severity-high);
+    font-weight: 700;
+    margin: 0 0 0.4rem;
+  }
+  .lede-title {
+    font-family: ui-serif, Georgia, serif;
+    font-size: clamp(1.4rem, 2.4vw, 2rem);
+    line-height: 1.18;
+    font-weight: 600;
+    margin: 0 0 0.55rem;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+  }
+  .lede-quote {
+    margin: 0.7rem 0 0;
+    padding: 0.5rem 0 0.4rem 1.3rem;
+    border-left: 3px solid var(--severity-high);
+    font-family: ui-serif, Georgia, serif;
+    font-size: 1.04rem;
+    line-height: 1.55;
+    font-style: italic;
+    color: var(--ink-soft);
+  }
+  .lede-quote::before { content: "“"; color: var(--severity-high); font-size: 1.2em; }
+  .lede-quote::after { content: "”"; color: var(--severity-high); font-size: 1.2em; }
+
+  /* ───── Severity dot ───── */
+  .sev-dot {
+    display: inline-block;
+    width: 0.55rem; height: 0.55rem;
+    border-radius: 50%;
+    margin-right: 0.15rem;
+    vertical-align: -1px;
+  }
+  .sev-high { background: var(--severity-high); }
+  .sev-mid { background: var(--severity-mid); }
+  .sev-low { background: var(--severity-low); }
+  .sev-neutral { background: var(--neutral); }
+
+  /* ───── Figure + caption — copied from base.html.j2 ───── */
+  figure { margin: 0.9rem 0; }
+  figcaption {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--slate);
+    margin-top: 0.55rem;
+    padding-left: 0.8rem;
+    border-left: 2px solid var(--rule-soft);
+    max-width: 62ch;
+  }
+  figcaption .fig-num {
+    font-family: ui-serif, Georgia, serif;
+    font-weight: 700;
+    font-style: italic;
+    color: var(--ink);
+    letter-spacing: 0.02em;
+  }
+  figcaption em { color: var(--ink-soft); font-style: italic; }
+
+  /* ───── Two-column layout helper ───── */
+  .two-col {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    gap: clamp(1.5rem, 3vw, 3rem);
+    align-items: start;
+  }
+  .two-col.eq { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .three-col {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(1rem, 2vw, 1.8rem);
+    align-items: start;
+  }
+  @media (max-width: 880px) {
+    .two-col, .three-col { grid-template-columns: 1fr; }
+  }
+
+  /* ───── Stat panel — same shape as report .hero-stats ───── */
+  .stat-panel {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.2rem 1.6rem;
+    padding: 1.1rem 1.3rem;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    margin: 1rem 0 0;
+  }
+  .stat-panel .stat-num {
+    font-family: ui-serif, Georgia, serif;
+    font-size: clamp(1.8rem, 3.6vw, 2.6rem);
+    line-height: 1;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: -0.02em;
+  }
+  .stat-panel .stat-label {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--slate);
+    margin-top: 0.3rem;
+    font-weight: 600;
+  }
+
+  /* ───── Module list (slide: frameworks) ───── */
+  .module-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem 1.6rem;
+    margin: 1rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .module-list li {
+    display: grid;
+    grid-template-columns: 2.4rem minmax(0, 1fr);
+    gap: 0.6rem;
+    align-items: baseline;
+    padding: 0.6rem 0;
+    border-top: 1px solid var(--rule);
+  }
+  .module-list .ml-letter {
+    font-family: ui-serif, Georgia, serif;
+    font-size: 1.6rem;
+    line-height: 1;
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .module-list .ml-name {
+    font-family: ui-serif, Georgia, serif;
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.15rem;
+    color: var(--ink);
+  }
+  .module-list .ml-cap {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.78rem;
+    color: var(--slate);
+    margin: 0;
+    line-height: 1.45;
+  }
+  .module-list .ml-cap code {
+    font-size: 0.85em;
+    color: var(--ink-soft);
+  }
+
+  /* ───── Module count strip (slide: by module) ───── */
+  .module-strip {
+    display: grid;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 0.7rem;
+    margin: 1.2rem 0 0;
+  }
+  .module-strip .ms {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    padding: 0.7rem 0.6rem;
+    text-align: center;
+  }
+  .module-strip .ms-letter {
+    font-family: ui-serif, Georgia, serif;
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--accent);
+    line-height: 1;
+  }
+  .module-strip .ms-count {
+    font-family: ui-serif, Georgia, serif;
+    font-size: 1.6rem;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1;
+    margin: 0.4rem 0 0.15rem;
+  }
+  .module-strip .ms-name {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--slate);
+  }
+  .module-strip .ms.muted .ms-count { color: var(--slate-soft); }
+
+  /* ───── Conversation honor roll ───── */
+  .honor-roll {
+    columns: 2;
+    column-gap: 2rem;
+    margin: 0.9rem 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    max-height: clamp(220px, 38vh, 380px);
+    overflow: hidden;
+  }
+  .honor-roll li {
+    break-inside: avoid;
+    padding: 0.18rem 0;
+    border-top: 1px solid var(--rule-soft);
+    font-family: ui-serif, Georgia, serif;
+  }
+  .honor-roll li:first-child { border-top: 0; }
+  .honor-roll li .hr-turns {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.7rem;
+    color: var(--slate-soft);
+    font-variant-numeric: tabular-nums;
+    margin-left: 0.4rem;
+  }
+
+  /* ───── CLI block (audit-loop slide) ───── */
+  .cli {
+    background: #14110d;
+    color: #e9dec5;
+    padding: 1.1rem 1.3rem;
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    font-size: clamp(0.78rem, 1vw, 0.93rem);
+    line-height: 1.55;
+    margin: 0;
+    border-left: 3px solid var(--accent);
+    overflow: hidden;
+    white-space: pre-wrap;
+  }
+  .cli .prompt { color: var(--accent-soft); font-weight: 700; }
+  .cli .flag { color: #d8a48c; }
+  .cli .comment { color: #8b8678; font-style: italic; }
+  .cli .out { color: #f4ecd9; }
+  .cli .out em { color: #e8c098; font-style: normal; font-weight: 700; }
+
+  /* ───── Step list (audit-loop slide) ─────
+     Two-row grid per item: counter in col 1 (rows 1-2), strong (title)
+     in col 2 row 1, small (caption) in col 2 row 2. Without explicit
+     placement the small flows back into col 1 of an implicit row 2 and
+     collapses to one-word-per-line. */
+  .step-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+  }
+  .step-list li {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 2.4rem minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 0.85rem;
+    row-gap: 0.15rem;
+    padding: 0.7rem 0;
+    border-top: 1px solid var(--rule);
+    align-items: baseline;
+  }
+  .step-list li:first-child { border-top: 0; }
+  .step-list li::before {
+    content: counter(step, decimal-leading-zero);
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    font-family: ui-serif, Georgia, serif;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.4;
+    align-self: start;
+  }
+  .step-list strong {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    display: block;
+    font-family: ui-serif, Georgia, serif;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .step-list small {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    display: block;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.78rem;
+    color: var(--slate);
+    line-height: 1.45;
+  }
+
+  /* ───── Cover slide overrides ───── */
+  .cover { justify-content: center; }
+  .cover .cover-title {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: clamp(4.5rem, 14vw, 11rem);
+    line-height: 0.92;
+    font-weight: 600;
+    margin: 0 0 1.4rem;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+  }
+  .cover .cover-deck {
+    font-family: ui-serif, Georgia, serif;
+    font-size: clamp(1.1rem, 1.8vw, 1.5rem);
+    font-style: italic;
+    color: var(--ink-soft);
+    line-height: 1.45;
+    margin: 0 0 1.4rem;
+    max-width: 56ch;
+  }
+  .cover .cover-byline {
+    margin-top: auto;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--slate);
+    font-weight: 600;
+  }
+  .cover .cover-byline .byline-italic {
+    font-family: ui-serif, Georgia, serif;
+    font-style: italic;
+    text-transform: none;
+    letter-spacing: 0.04em;
+    color: var(--ink-soft);
+    font-weight: 500;
+  }
+
+  /* ───── Reveal animation ───── */
+  .slide.active .reveal { opacity: 1; transform: translateY(0); }
+  .reveal {
+    opacity: 0;
+    transform: translateY(8px);
+    transition:
+      opacity 0.5s var(--ease-out-quart),
+      transform 0.5s var(--ease-out-quart);
+  }
+  .reveal:nth-child(1) { transition-delay: 0.04s; }
+  .reveal:nth-child(2) { transition-delay: 0.14s; }
+  .reveal:nth-child(3) { transition-delay: 0.24s; }
+  .reveal:nth-child(4) { transition-delay: 0.34s; }
+  .reveal:nth-child(5) { transition-delay: 0.44s; }
+  .reveal:nth-child(6) { transition-delay: 0.54s; }
+  .reveal:nth-child(7) { transition-delay: 0.64s; }
+  .reveal:nth-child(8) { transition-delay: 0.74s; }
+  @media (prefers-reduced-motion: reduce) {
+    .slide, .reveal { transition: opacity 0.05s linear; transform: none; }
+  }
+
+  /* ───── Navigation pill ───── */
+  .nav {
+    position: fixed;
+    bottom: 1.3rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    padding: 0.4rem 0.6rem;
+    border-radius: 999px;
+    box-shadow: 0 2px 12px rgba(20, 17, 13, 0.08);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  .nav button {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--slate);
+    font-size: 0.74rem;
+    padding: 0.22rem 0.55rem;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 600;
+  }
+  .nav button:hover { background: var(--bg-deep); color: var(--ink); }
+  .nav button:disabled { opacity: 0.3; cursor: default; }
+  .nav .nav-cur {
+    font-family: ui-serif, Georgia, serif;
+    font-style: italic;
+    font-size: 0.88rem;
+    color: var(--ink);
+    padding: 0 0.45rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .nav .nav-cur .total { color: var(--slate-soft); margin-left: 0.3em; }
+
+  .progress {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: 2px;
+    background: rgba(166, 74, 46, 0.12);
+    z-index: 30;
+  }
+  .progress-bar {
+    height: 100%;
+    background: var(--accent);
+    width: 0;
+    transition: width 0.4s var(--ease-out-quart);
+  }
+
+  .hint {
+    position: fixed;
+    bottom: 0.4rem;
+    right: 0.6rem;
+    z-index: 31;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.62rem;
+    color: var(--slate-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    pointer-events: none;
+  }
+
+  /* ───── Speaker / presenter notes ───── */
+  .speaker-notes {
+    position: absolute;
+    width: 1px; height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0; padding: 0; margin: -1px;
+  }
+  .presenter-overlay {
+    position: fixed;
+    bottom: 5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 40;
+    width: min(720px, 90vw);
+    max-height: 40vh;
+    overflow-y: auto;
+    background: #14110d;
+    color: #f0e8d6;
+    padding: 1.3rem 1.6rem;
+    border-radius: 4px;
+    box-shadow: 0 6px 32px rgba(20, 17, 13, 0.35);
+    font-family: ui-serif, Georgia, serif;
+    font-size: 1rem;
+    line-height: 1.55;
+    display: none;
+  }
+  body.presenter-on .presenter-overlay { display: block; }
+  .presenter-overlay h6 {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--accent-soft);
+    font-weight: 700;
+    margin: 0 0 0.4rem;
+    border-bottom: 1px solid rgba(216, 164, 140, 0.3);
+    padding-bottom: 0.35rem;
+  }
+  .presenter-overlay p { margin: 0.4rem 0; color: rgba(252, 246, 230, 0.92); }
+  .presenter-overlay strong { color: #fff; font-weight: 600; }
+  .presenter-overlay code { font-family: ui-monospace, monospace; color: var(--accent-soft); }
+
+  /* Print: page-per-slide; speaker notes appear below each slide. */
+  @media print {
+    body, html, .deck { overflow: visible; height: auto; background: white; }
+    .slide {
+      position: relative;
+      page-break-after: always;
+      opacity: 1 !important;
+      pointer-events: auto;
+      height: 100vh;
+      transform: none !important;
+    }
+    .slide::before { display: none; }
+    .nav, .progress, .presenter-overlay, .hint { display: none; }
+    .reveal { opacity: 1 !important; transform: none !important; }
+    .speaker-notes {
+      position: static; width: auto; height: auto;
+      overflow: visible; clip: auto; clip-path: none;
+      white-space: normal;
+      margin: 1rem 0; padding: 0.9rem 1.1rem;
+      background: #f4f0e6;
+      border-left: 3px solid #a64a2e;
+      font-family: ui-serif, Georgia, serif;
+      font-size: 10pt; line-height: 1.5;
+      color: #2c2823;
+    }
+    .speaker-notes::before {
+      content: "Speaker notes";
+      display: block;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      color: #4a5160;
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+  }
+</style>
+</head>
+<body>
+
+{# ───── Pre-compute deck-wide values ─────
+   Sample disclosure data, total cost, and headline finding all derive
+   from the same aggregator the report uses — no separate code path. #}
+{% set _pool = audit.sampling_config.n %}
+{% set _sampled = audit.corpus_stats.sampled_conversations %}
+{% set _dropped = (_pool - _sampled) if _pool >= _sampled else 0 %}
+{% set _turns = audit.corpus_stats.sampled_turns %}
+{% set _date_start = audit.corpus_stats.date_range_start.date().isoformat() if audit.corpus_stats.date_range_start else "" %}
+{% set _date_end = audit.corpus_stats.date_range_end.date().isoformat() if audit.corpus_stats.date_range_end else "" %}
+{% set _total_findings = aggregate.total %}
+{% set _behaviour_findings = aggregate.behaviour_total %}
+{% set _modules_firing = aggregate.modules_with_findings %}
+{% set _duration_min = ((audit.completed_at - audit.started_at).total_seconds() / 60.0) if audit.completed_at else 0.0 %}
+{% set _module_counts = {} %}
+{% for s in sections %}
+  {% if _module_counts.update({s.module.value: s.count}) %}{% endif %}
+{% endfor %}
+{% set _cost_ns = namespace(total=0.0) %}
+{% for m, u in audit.token_usage.by_module.items() %}
+  {% set _cost_ns.total = _cost_ns.total + u.usd_cost %}
+{% endfor %}
+{% if audit.token_usage.orchestrator %}
+  {% set _cost_ns.total = _cost_ns.total + audit.token_usage.orchestrator.usd_cost %}
+{% endif %}
+{% set _total_cost = _cost_ns.total %}
+{% set _primary_source = (audit.sources | first).value if audit.sources else "claude-code" %}
+{% set _primary_path = audit.source_paths.get(audit.sources | first, "~/.claude/projects") if audit.sources else "~/.claude/projects" %}
+
+<div class="progress" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
+
+<main class="deck" id="deck">
+
+{# ───────────────────────── Slide 1 — Cover ───────────────────────── #}
+<section class="slide cover" data-title="Cover">
+  <div class="reveal">
+    <p class="slide-masthead">
+      <span>Lucid Epistemic Audit</span>
+      <span class="mast-divider"></span>
+      <span class="mast-volume">Hackathon Demo · {{ audit.id }}</span>
+    </p>
+  </div>
+  <div>
+    <h1 class="cover-title reveal">Lucid.</h1>
+    <p class="cover-deck reveal">An open-source epistemic audit for your personal AI conversation history — turning sessions and exports into a forensic intelligence brief.</p>
+  </div>
+  <div class="cover-byline reveal">
+    <span>Hackathon · Anthropic Build with Claude · Apr 21–26, 2026</span>
+    <span class="byline-italic">Daniel Bentes · with Claude Opus 4.7</span>
+  </div>
+  <aside class="speaker-notes">
+    <strong>Open with the artifact, not the pitch.</strong> Pull up the rendered HTML report on a second screen — the report IS the demo. Mention the deck is rendered from the same Python generator, sharing the same design tokens.
+    <strong>Time:</strong> 30 seconds.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 01 · Cover</span>
+    <span class="pagenum">01<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 2 — Premise ───────────────────────── #}
+<section class="slide" data-title="Premise">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 01 · The premise</p>
+  <h2 class="display reveal">Your assistant agrees with you.</h2>
+  <div class="two-col" style="margin-top: 1.2rem;">
+    <div class="reveal">
+      <p style="font-family: ui-serif, Georgia, serif; font-size: clamp(4rem, 8vw, 7rem); line-height: 1; font-weight: 600; color: var(--severity-high); margin: 0;">58<span style="font-size: 0.5em; color: var(--slate);">%</span></p>
+      <p style="font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.92rem; color: var(--ink-soft); line-height: 1.55; margin: 0.6rem 0 0; max-width: 38ch;">
+        of LLM responses across GPT-4o, Claude 3.5 Sonnet, and Gemini 1.5 Pro exhibit <em>sycophancy</em> in a 58k-prompt audit. Sharma et&nbsp;al., 2023.
+      </p>
+    </div>
+    <div class="reveal">
+      <p class="drop-cap" style="font-family: ui-serif, Georgia, serif; font-size: clamp(1.1rem, 1.7vw, 1.4rem); line-height: 1.5; color: var(--ink-soft); max-width: 42ch; margin: 0;">
+        Sycophancy isn't a bug in one model — it's a structural property of how RLHF rewards agreeable outputs. Across the literature it surfaces under different names: echo chambers, belief drift, perspective drift, cave-ins.
+      </p>
+    </div>
+  </div>
+  <aside class="speaker-notes">
+    <strong>The 58% figure</strong> is from Sharma et al. 2023 (<code>arxiv:2310.13548</code>). Across GPT-4, Claude 1.3/2, PaLM-2 — even after RLHF, all assistants reliably agree with stated user opinions even when objectively wrong.
+    <strong>Anchor:</strong> "If your assistant agrees with you 58% of the time when it shouldn't, that's not a tool — that's a yes-man."
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 02 · The premise</span>
+    <span class="pagenum">02<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 3 — Lucid one-sentence ───────────────────────── #}
+<section class="slide" data-title="Lucid">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 02 · Lucid</p>
+  <h2 class="display reveal" style="max-width: 26ch;">
+    Lucid reads <em>your</em> conversation history and tells you exactly when, how, and how often the assistant agreed with you when it shouldn't have.
+  </h2>
+  <p class="reveal" style="font-family: ui-serif, Georgia, serif; font-size: clamp(1rem, 1.5vw, 1.25rem); color: var(--ink-soft); line-height: 1.55; margin: 1.4rem 0 0; max-width: 64ch; font-style: italic;">
+    Single CLI. Single static HTML report. No telemetry. Your data never leaves your machine except to call the Anthropic and Voyage APIs that score the findings. Open-source, MIT-licensed.
+  </p>
+  <div class="sidenote reveal" style="margin-top: 2rem; max-width: 70ch;">
+    <p class="sn-title">Differentiation in one line</p>
+    <p style="margin: 0;">Not a benchmark on test prompts — an audit on <em>your</em> actual conversations, with every finding citing a published research framework.</p>
+  </div>
+  <aside class="speaker-notes">
+    <strong>Read the headline aloud, slowly.</strong> Hit "exactly when, how, and how often."
+    <strong>If asked "isn't this just running an LLM on LLMs?":</strong> Yes — but the value is the COMPOSITION of seven research frameworks, calibrated against published baselines, with structured findings stored in SQLite for audit trails.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 03 · Lucid in one sentence</span>
+    <span class="pagenum">03<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 4 — Seven frameworks ───────────────────────── #}
+<section class="slide" data-title="Frameworks">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 03 · The research</p>
+  <h2 class="display reveal">Seven published frameworks, one composition.</h2>
+  <ol class="module-list reveal" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+    <li>
+      <span class="ml-letter">A</span>
+      <div>
+        <p class="ml-name">Spiral-Bench</p>
+        <p class="ml-cap">17 assistant-side behaviours, intensity 1–3. <code>eqbench.com/spiral-bench</code></p>
+      </div>
+    </li>
+    <li>
+      <span class="ml-letter">B</span>
+      <div>
+        <p class="ml-name">Sharma 2023</p>
+        <p class="ml-cap">Paired-exchange sycophancy: feedback flips + answer cave-ins. <code>arxiv:2310.13548</code></p>
+      </div>
+    </li>
+    <li>
+      <span class="ml-letter">C</span>
+      <div>
+        <p class="ml-name">SycEval direction</p>
+        <p class="ml-cap">Caves classified as progressive (correct) or regressive (worse). <code>AAAI AIES 2025</code></p>
+      </div>
+    </li>
+    <li>
+      <span class="ml-letter">D</span>
+      <div>
+        <p class="ml-name">Jain 2025 <em style="color:var(--slate);">(opt-in)</em></p>
+        <p class="ml-cap">Cross-turn framing drift toward the user's worldview, no explicit agreement.</p>
+      </div>
+    </li>
+    <li>
+      <span class="ml-letter">E</span>
+      <div>
+        <p class="ml-name">BeliefShift</p>
+        <p class="ml-cap">Cross-conversation belief drift with evidence-vs-pressure attribution.</p>
+      </div>
+    </li>
+    <li>
+      <span class="ml-letter">F</span>
+      <div>
+        <p class="ml-name">Influence Tactics Protocol</p>
+        <p class="ml-cap">9-category user-prompt analyser: emotional triggers, urgency, false dilemmas.</p>
+      </div>
+    </li>
+    <li>
+      <span class="ml-letter">G</span>
+      <div>
+        <p class="ml-name">Time / model attribution</p>
+        <p class="ml-cap">Deterministic — every finding pinned to model + month. No LLM.</p>
+      </div>
+    </li>
+    <li>
+      <span class="ml-letter">H</span>
+      <div>
+        <p class="ml-name">Memory consistency <em style="color:var(--slate);">(novel)</em></p>
+        <p class="ml-cap">Voyage retrieval + Opus classification of memory claims vs. corpus.</p>
+      </div>
+    </li>
+  </ol>
+  <aside class="speaker-notes">
+    <strong>Don't read every framework.</strong> Land on three: Spiral-Bench (A) for breadth, Sharma (B) for foundation, Memory (H) as the novel contribution.
+    <strong>D is opt-in</strong> via <code>--include-module-d</code> (expensive). <strong>G is deterministic</strong> — no LLM.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 04 · Seven frameworks</span>
+    <span class="pagenum">04<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 5 — Architecture ───────────────────────── #}
+<section class="slide" data-title="Architecture">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 04 · Architecture</p>
+  <h2 class="display reveal">Managed Agents orchestrator drives eight audit modules.</h2>
+  <div class="three-col reveal" style="margin-top: 1.4rem;">
+    <div style="background: var(--bg-card); border: 1px solid var(--rule); padding: 1rem 1.1rem;">
+      <p class="eyebrow" style="margin: 0 0 0.4rem;">Ingest</p>
+      <h3>Local corpus parser</h3>
+      <p style="font-size: 0.86rem; color: var(--slate); line-height: 1.5;">~/.claude/projects (JSONL) + Claude.ai export (conversations.json + memories.json). Pydantic v2.</p>
+    </div>
+    <div style="background: var(--ink); color: #f0e8d6; border: 1px solid var(--ink); padding: 1rem 1.1rem;">
+      <p class="eyebrow" style="margin: 0 0 0.4rem; color: var(--accent-soft);">Orchestrator</p>
+      <h3 style="color: #fff;">Sonnet 4.6 · Managed Agents</h3>
+      <p style="font-size: 0.86rem; color: rgba(240, 232, 214, 0.85); line-height: 1.5;">Custom-tool loop; routes work to per-module Opus 4.7 / Sonnet 4.6 calls. 8 client-executed tools.</p>
+    </div>
+    <div style="background: var(--bg-card); border: 1px solid var(--rule); padding: 1rem 1.1rem;">
+      <p class="eyebrow" style="margin: 0 0 0.4rem;">Persistence</p>
+      <h3>SQLite store + report</h3>
+      <p style="font-size: 0.86rem; color: var(--slate); line-height: 1.5;">Findings checkpointed continuously. Idempotent re-runs. Static HTML report — no scripts.</p>
+    </div>
+  </div>
+  <p class="reveal" style="font-family: ui-serif, Georgia, serif; font-style: italic; font-size: 0.95rem; color: var(--ink-soft); line-height: 1.55; margin: 1.5rem 0 0; max-width: 80ch;">
+    Findings carry <code>citation</code>, <code>detected_by</code>, <code>prompt_version</code>, <code>prompt_hash</code>, Beta-posterior confidence intervals, and a SHA-256 idempotency key. Re-running doesn't duplicate findings — <code>UNIQUE (audit_run_id, module, conversation_id, turn_ids_hash, behavior)</code> rejects them.
+  </p>
+  <aside class="speaker-notes">
+    <strong>The unusual choice:</strong> Managed Agents (still beta, header <code>managed-agents-2026-04-01</code>). Sonnet 4.6 routes via 8 client-executed tools. Corpus stays local.
+    <strong>Critical detail:</strong> Sonnet 4.6 doesn't always reliably do multi-step tool chaining — added direct-invocation backfill. SQLite checkpoints continuously, idempotency key prevents duplicates.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 05 · Architecture</span>
+    <span class="pagenum">05<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 6 — Audit loop CLI ───────────────────────── #}
+<section class="slide" data-title="Audit loop">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 05 · The audit loop</p>
+  <h2 class="display reveal">What happens when you run <code style="font-size: 0.65em; background: var(--bg-card); padding: 0 0.4rem; border: 1px solid var(--rule);">lucid audit</code>.</h2>
+  <div class="two-col" style="margin-top: 1.2rem;">
+    <ol class="step-list reveal">
+      <li><strong>Parse + sample</strong><small>Stratified, recency-weighted sample. Default 100, configurable, <code>--sample all</code> for full corpus. <code>min_turns=5</code> filter (configurable).</small></li>
+      <li><strong>Pre-flight cost estimate</strong><small><code>messages.count_tokens</code> (free) + per-module output budgets. Hard $20 gate; user must authorise above that.</small></li>
+      <li><strong>Spin up Managed Agents session</strong><small>Sonnet 4.6 orchestrator + 8 client-executed tools. Live event stream into the CLI.</small></li>
+      <li><strong>Run modules — checkpoint each finding to SQLite</strong><small>Idempotent. Failure mid-run never loses prior work. <code>--resume run-&lt;id&gt;</code> picks up where it left off.</small></li>
+      <li><strong>Render report</strong><small>One static HTML file — no scripts, no external resources, CSP locks down inline JS. This deck rendered from the same generator.</small></li>
+    </ol>
+    <pre class="cli reveal"><span class="comment"># Audit a {% if _primary_source == "claude-code" %}Claude Code session corpus{% else %}Claude.ai export{% endif %}</span>
+<span class="prompt">$</span> uv run lucid audit \
+    <span class="flag">--source</span> {{ _primary_source }} \
+    <span class="flag">--path</span> {{ _primary_path }} \
+    <span class="flag">--sample</span> {{ _pool }}
+
+<span class="out">{{ _pool }} discovered, {{ _sampled }} sampled
+Modules: A B C E F H
+Cost:    <em>${{ "%.2f"|format(_total_cost) }}</em></span>
+
+<span class="comment"># Live findings stream</span>
+<span class="out">module A · <em>stored={{ _module_counts.get('A', 0) }}</em>
+module B · <em>stored={{ _module_counts.get('B', 0) }}</em>
+module C · <em>stored={{ _module_counts.get('C', 0) }}</em>
+module E · <em>stored={{ _module_counts.get('E', 0) }}</em>
+module F · <em>stored={{ _module_counts.get('F', 0) }}</em>
+module H · <em>stored={{ _module_counts.get('H', 0) }}</em>
+module G · <em>stored={{ _module_counts.get('G', 0) }}</em>
+<em>✓ {{ audit.id }}.html
+  {{ _total_findings }} findings · {{ "%.0f"|format(_duration_min) }} min</em></span></pre>
+  </div>
+  <aside class="speaker-notes">
+    <strong>This is the demo moment.</strong> If possible, run <code>lucid audit --source {{ _primary_source }} --path {{ _primary_path }} --dry-run</code> live to show the cost-estimate flow.
+    <strong>Real numbers from this run:</strong> {{ _sampled }} conversations, {{ _turns }} turns, {{ _total_findings }} findings, {{ "%.0f"|format(_duration_min) }} minutes wall-clock, ${{ "%.2f"|format(_total_cost) }} actual spend.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 06 · The audit loop</span>
+    <span class="pagenum">06<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 7 — Sample disclosure (correctness) ───────────────────────── #}
+<section class="slide" data-title="Sample">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 06 · The corpus we audited</p>
+  <h2 class="display reveal">Honesty about what we read — and what we didn't.</h2>
+
+  <div class="two-col" style="margin-top: 1.4rem;">
+    <div>
+      <aside class="sample-disclosure reveal" style="margin: 0;">
+        <p class="sd-line">
+          <span class="sd-label">Sample</span>
+          <strong>{{ _sampled }}</strong> of <strong>{{ _pool }}</strong>
+          conversations audited
+          {% if _dropped > 0 %}
+            &middot; <em>{{ _dropped }} excluded</em> (fewer than {{ audit.sampling_config.min_turns }} turns — not enough exchange to develop a pattern)
+          {% endif %}
+        </p>
+      </aside>
+      <div class="stat-panel reveal" style="margin-top: 1rem;">
+        <div>
+          <div class="stat-num">{{ _sampled }}</div>
+          <div class="stat-label">conversations audited</div>
+        </div>
+        <div>
+          <div class="stat-num">{{ _turns }}</div>
+          <div class="stat-label">turns read end to end</div>
+        </div>
+        <div>
+          <div class="stat-num">{{ _behaviour_findings }}</div>
+          <div class="stat-label">behaviour findings</div>
+        </div>
+        <div>
+          <div class="stat-num">{{ _modules_firing }}<span style="color: var(--slate-soft); font-size: 0.55em;"> / {{ aggregate.modules_total }}</span></div>
+          <div class="stat-label">modules firing</div>
+        </div>
+      </div>
+      <p class="reveal" style="font-family: ui-serif, Georgia, serif; font-style: italic; font-size: 0.92rem; color: var(--ink-soft); margin: 1rem 0 0; line-height: 1.55; max-width: 56ch;">
+        Date range: {{ _date_start }} → {{ _date_end }}.
+        Source{% if audit.sources | length != 1 %}s{% endif %}:
+        {% for s in audit.sources %}<code>{{ s.value }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.
+        Stratified by project, recency-weighted, seed={{ audit.sampling_config.seed }} — reproducible.
+      </p>
+    </div>
+    <div class="reveal">
+      <p class="eyebrow" style="color: var(--ink); margin: 0 0 0.5rem;">Conversations audited</p>
+      <ul class="honor-roll">
+        {% for cell in aggregate.fingerprint[:24] %}
+          <li>{{ cell.conversation_short }}<span class="hr-turns">· {{ cell.finding_count }} finding{% if cell.finding_count != 1 %}s{% endif %}</span></li>
+        {% endfor %}
+      </ul>
+      {% if aggregate.fingerprint | length > 24 %}
+        <p style="font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.74rem; color: var(--slate); margin: 0.6rem 0 0; text-transform: uppercase; letter-spacing: 0.12em;">
+          + {{ aggregate.fingerprint | length - 24 }} more — full list in the report.
+        </p>
+      {% endif %}
+    </div>
+  </div>
+
+  <aside class="speaker-notes">
+    <strong>This is the answer to "did you cherry-pick?"</strong> Show the corpus stats. Show the actual conversation titles. Stress that the {{ _dropped }} excluded conversations are short one-shot exchanges (fewer than 5 turns) — not enough to develop an epistemic pattern.
+    <strong>If asked why min_turns=5:</strong> Sycophancy and belief drift are multi-turn phenomena. A two-turn "what time is it" → "8pm" exchange has nowhere to drift to.
+    <strong>Reproducibility:</strong> seed=42, stratified by project, recency-weighted. Same input → same sample.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 07 · The corpus</span>
+    <span class="pagenum">07<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 8 — The lede / signature finding ───────────────────────── #}
+<section class="slide" data-title="Lede">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 07 · The lede</p>
+  <h2 class="display reveal" style="margin-bottom: 0.8rem;">What the audit actually found.</h2>
+
+  {% if aggregate.headlines %}
+  {% set lede = aggregate.headlines[0] %}
+  <article class="lede reveal">
+    <p class="lede-eyebrow">Lead finding · Module {{ lede.module_short }} · {{ lede.severity_class }} severity</p>
+    <h3 class="lede-title">{{ lede.plain_english }}</h3>
+    <div style="font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.74rem; color: var(--slate); text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 0.6rem; display: flex; gap: 0.7rem; flex-wrap: wrap; align-items: center;">
+      <span><span class="sev-dot sev-{{ lede.severity_class }}"></span>{{ lede.severity_class }}</span>
+      <span>· <code>{{ lede.behavior }}</code></span>
+      {% if lede.intensity is not none %}
+        <span>· intensity {{ lede.intensity }} / 3</span>
+      {% endif %}
+      <span>· conf {{ "%.2f"|format(lede.confidence) }}</span>
+      <span>· conv {{ lede.conversation_short }}</span>
+    </div>
+    {% if lede.quote %}
+      <blockquote class="lede-quote">{{ lede.quote }}</blockquote>
+    {% endif %}
+    <p style="font-family: ui-serif, Georgia, serif; font-size: 0.92rem; color: var(--ink-soft); margin: 0.7rem 0 0; line-height: 1.55;">
+      Cited via <em>{{ lede.citation_short }}</em>. Detected by {% for m in lede.evidence_blocks %}{% endfor %}Claude judge with self-consistency ensemble.
+    </p>
+  </article>
+  {% endif %}
+
+  <aside class="speaker-notes">
+    <strong>Read the lede aloud.</strong> If a quote is shown, read the quote — it lands harder than the explanation.
+    <strong>Severity logic:</strong> intensity 3 → high (oxide red), intensity 2 → mid (amber), intensity 1 → low (ink blue).
+    <strong>Don't oversell:</strong> say "the assistant did this in this conversation" — not "the assistant always does this." Specificity is credibility.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 08 · The lede</span>
+    <span class="pagenum">08<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 9 — Module distribution ───────────────────────── #}
+<section class="slide" data-title="By module">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 08 · By module</p>
+  <h2 class="display reveal">Which frameworks fired, and how loud.</h2>
+  <div class="module-strip reveal" style="margin-top: 1.5rem;">
+    {% for letter in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] %}
+      {% set count = _module_counts.get(letter, 0) %}
+      <div class="ms {% if count == 0 %}muted{% endif %}">
+        <div class="ms-letter">{{ letter }}</div>
+        <div class="ms-count">{{ count }}</div>
+        <div class="ms-name">{% if letter == 'A' %}Spiral{% elif letter == 'B' %}Sharma{% elif letter == 'C' %}SycEval{% elif letter == 'D' %}Persp.{% elif letter == 'E' %}Belief{% elif letter == 'F' %}Influence{% elif letter == 'G' %}Attrib.{% elif letter == 'H' %}Memory{% endif %}</div>
+      </div>
+    {% endfor %}
+  </div>
+  <figure class="reveal" style="margin-top: 1.4rem;">
+    <figcaption>
+      <span class="fig-num">Fig.&nbsp;1</span>&nbsp;&middot;
+      <em>Findings per module on this run.</em>
+      Module G is deterministic (one finding per conversation by construction). Module D is opt-in via <code>--include-module-d</code> and was disabled here. Modules without findings ran clean — they checked but found nothing worth flagging.
+    </figcaption>
+  </figure>
+
+  <aside class="speaker-notes">
+    <strong>Spiral-Bench (A)</strong> dominates because it's the broadest module — 17 distinct behaviours.
+    <strong>Memory (H)</strong> is second because every memory claim becomes a candidate finding.
+    <strong>Sharma (B), SycEval (C), BeliefShift (E)</strong> are smaller because they detect specific subtypes that don't fire in every conversation.
+    <strong>Module F (Influence Tactics)</strong> ran clean — Daniel's prompts don't use emotional triggers, urgency, false dilemmas. That's a real signal, not an absence.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 09 · By module</span>
+    <span class="pagenum">09<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 10 — More findings (#2-#4) ───────────────────────── #}
+<section class="slide" data-title="More findings">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 09 · The next three</p>
+  <h2 class="display reveal">After the lede.</h2>
+  <ol class="reveal" style="list-style: none; padding: 0; margin: 1.2rem 0 0; counter-reset: hl 1;">
+    {% for h in aggregate.headlines[1:4] %}
+      <li style="counter-increment: hl; display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: 1rem; padding: 1rem 0; border-top: 1px solid var(--rule);">
+        <span style="font-family: ui-serif, Georgia, serif; font-size: 1.6rem; font-weight: 600; color: var(--accent); padding-top: 0.1rem;">{{ "%02d"|format(loop.index + 1) }}</span>
+        <div>
+          <h3 style="margin: 0 0 0.3rem;">{{ h.plain_english }}</h3>
+          <div style="font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.72rem; color: var(--slate); text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 0.4rem; display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center;">
+            <span><span class="sev-dot sev-{{ h.severity_class }}"></span>{{ h.severity_class }}</span>
+            <span>· module {{ h.module_short }}</span>
+            <span>· <code>{{ h.behavior }}</code></span>
+            {% if h.intensity is not none %}<span>· intensity {{ h.intensity }}</span>{% endif %}
+            <span>· conf {{ "%.2f"|format(h.confidence) }}</span>
+          </div>
+          {% if h.quote %}
+            <p style="font-family: ui-serif, Georgia, serif; font-style: italic; font-size: 0.94rem; color: var(--ink-soft); background: var(--bg-deep); border-left: 3px solid var(--rule); padding: 0.55rem 0.8rem; margin: 0;">{{ h.quote[:220] }}{% if h.quote|length > 220 %}…{% endif %}</p>
+          {% endif %}
+        </div>
+      </li>
+    {% endfor %}
+  </ol>
+  <aside class="speaker-notes">
+    <strong>Pick one to dwell on.</strong> The other two are reinforcement.
+    <strong>If a Memory finding (H) appears here:</strong> note that this is the novel module — Voyage embeds the memory claim, retrieves top-k corpus excerpts, then Opus 4.7 classifies the claim as well-supported / weakly-supported / unsupported / contradicted.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 10 · After the lede</span>
+    <span class="pagenum">10<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 11 — Calibration & honesty ───────────────────────── #}
+<section class="slide" data-title="Calibration">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 10 · Calibration & honesty</p>
+  <h2 class="display reveal">Findings you can argue with.</h2>
+  <div class="two-col" style="margin-top: 1.4rem;">
+    <div class="reveal">
+      <h3>Every finding is auditable.</h3>
+      <p style="font-family: ui-serif, Georgia, serif; font-size: 0.96rem; line-height: 1.55; color: var(--ink-soft);">
+        Each row in the SQLite store carries the prompt version, prompt SHA-256, the model that produced it, the conversation ID, and the turn ID hash. You can reconstruct exactly what the judge saw.
+      </p>
+      <h3 style="margin-top: 1.2rem;">Null findings are not findings.</h3>
+      <p style="font-family: ui-serif, Georgia, serif; font-size: 0.96rem; line-height: 1.55; color: var(--ink-soft);">
+        When a module says "no sycophancy here" or "no drift," that's an absence of signal, not a hit. The report's headline list filters them out. They appear in the per-module sections, where ran-clean is the right reading.
+      </p>
+    </div>
+    <div class="reveal">
+      <h3>Three calibration anchors.</h3>
+      <ul style="padding-left: 1.1rem; line-height: 1.65; color: var(--ink-soft); font-family: ui-serif, Georgia, serif; font-size: 0.96rem;">
+        <li><strong>Module A (Spiral-Bench):</strong> calibrated against eqbench's reference labels via Krippendorff α + Gwet AC1.</li>
+        <li><strong>Module C (SycEval):</strong> calibrated against the AAAI AIES 2025 progressive/regressive labels.</li>
+        <li><strong>Module H (Memory):</strong> calibrated by hand-labelled subset; sub-claim refinement when the parent is too coarse.</li>
+      </ul>
+      <p style="font-family: ui-serif, Georgia, serif; font-size: 0.92rem; color: var(--ink-soft); font-style: italic; line-height: 1.55; margin-top: 0.8rem;">
+        Confidence intervals are Beta posteriors with BCa bootstrap. The whiskers in the report are not for show.
+      </p>
+    </div>
+  </div>
+  <aside class="speaker-notes">
+    <strong>This is the slide that wins the technical judge.</strong> Calibration numbers, not vibes.
+    <strong>Krippendorff α</strong> measures inter-rater agreement for ordinal labels; <strong>Gwet AC1</strong> is more robust when one label dominates (which it does in sycophancy). Per-label κ. Quadratic-weighted κ on intensity. BCa bootstrap for confidence intervals.
+    <strong>The point:</strong> a finding's confidence value is the result of an actual statistical procedure, not a model's self-rated number.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 11 · Calibration & honesty</span>
+    <span class="pagenum">11<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+{# ───────────────────────── Slide 12 — Thanks / Q&A ───────────────────────── #}
+<section class="slide" data-title="Thanks">
+  <p class="eyebrow reveal"><span class="tick"></span>Volume 11 · Thank you</p>
+  <h2 class="display reveal">Lucid is yours to fork, audit, extend.</h2>
+  <div class="two-col" style="margin-top: 1.4rem;">
+    <div class="reveal">
+      <h3>What ships today</h3>
+      <ul style="padding-left: 1.1rem; line-height: 1.7; font-family: ui-serif, Georgia, serif; font-size: 0.96rem; color: var(--ink-soft);">
+        <li>CLI: <code>uv run lucid audit</code> end-to-end</li>
+        <li>8 modules (7 from research, 1 novel: Memory)</li>
+        <li>Static HTML report — no scripts, no telemetry</li>
+        <li>This deck, generated from the same Python</li>
+        <li>SQLite store with idempotent re-runs</li>
+        <li>Calibration numbers in <code>docs/calibration.md</code></li>
+      </ul>
+    </div>
+    <div class="reveal">
+      <h3>What's next</h3>
+      <ul style="padding-left: 1.1rem; line-height: 1.7; font-family: ui-serif, Georgia, serif; font-size: 0.96rem; color: var(--ink-soft);">
+        <li>Module D (perspective drift) — wire defaults</li>
+        <li>Diff mode: compare today's audit to last month</li>
+        <li>Per-project rollups + Slack/email summary</li>
+        <li>Cohort study with 10+ shared corpora</li>
+        <li>Plug-in ingest for ChatGPT, Gemini exports</li>
+      </ul>
+    </div>
+  </div>
+  <div class="reveal" style="display: flex; justify-content: space-between; align-items: baseline; gap: 1.4rem; flex-wrap: wrap; padding-top: 1.2rem; margin-top: 1.5rem; border-top: 1px solid var(--rule);">
+    <p style="font-family: ui-serif, Georgia, serif; font-style: italic; font-size: 1.1rem; color: var(--ink-soft); margin: 0;">
+      Daniel Bentes · with Claude Opus 4.7
+    </p>
+    <p style="font-family: ui-mono, ui-monospace, monospace; font-size: 0.86rem; color: var(--ink); margin: 0;">
+      github.com/danielbentes/lucid
+    </p>
+  </div>
+  <aside class="speaker-notes">
+    <strong>Open the floor.</strong> Encourage the judges to clone the repo and run it on their own corpus during Q&A.
+    <strong>If asked about cohort study:</strong> next step is to ship the tool to 10–20 power users, get their corpora (anonymised) into a cohort table, then publish aggregated patterns: "across N users, 3.2% of memory claims were unsupported."
+    <strong>License:</strong> MIT. Open source.
+  </aside>
+  <div class="slide-chrome">
+    <span class="runner">№ 12 · Thank you</span>
+    <span class="pagenum">12<span class="total"> / 12</span></span>
+  </div>
+</section>
+
+</main>
+
+<nav class="nav" aria-label="Slide navigation">
+  <button id="prevBtn" type="button" aria-label="Previous slide">‹ Prev</button>
+  <span class="nav-cur" aria-live="polite"><span id="curNum">01</span><span class="total"> / 12</span></span>
+  <button id="nextBtn" type="button" aria-label="Next slide">Next ›</button>
+  <button id="notesBtn" type="button" aria-label="Toggle presenter notes">Notes</button>
+</nav>
+
+<aside class="presenter-overlay" id="presenterOverlay" aria-live="polite">
+  <h6 id="presenterTitle">Speaker notes</h6>
+  <div id="presenterContent">No notes for this slide.</div>
+</aside>
+
+<div class="hint">Arrow keys · N for notes · P to print</div>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var total = slides.length;
+  var idx = 0;
+  var bar = document.getElementById('progressBar');
+  var prevBtn = document.getElementById('prevBtn');
+  var nextBtn = document.getElementById('nextBtn');
+  var notesBtn = document.getElementById('notesBtn');
+  var curNum = document.getElementById('curNum');
+  var presenter = document.getElementById('presenterOverlay');
+  var presenterTitle = document.getElementById('presenterTitle');
+  var presenterContent = document.getElementById('presenterContent');
+
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+  function show(i) {
+    if (i < 0) i = 0;
+    if (i >= total) i = total - 1;
+    idx = i;
+    slides.forEach(function (s, j) {
+      if (j === i) s.classList.add('active');
+      else s.classList.remove('active');
+    });
+    if (bar) bar.style.width = ((i + 1) / total * 100) + '%';
+    if (curNum) curNum.textContent = pad(i + 1);
+    if (prevBtn) prevBtn.disabled = (i === 0);
+    if (nextBtn) nextBtn.disabled = (i === total - 1);
+    var hash = '#slide-' + (i + 1);
+    if (location.hash !== hash) {
+      try { history.replaceState(null, '', hash); } catch (e) {}
+    }
+    updatePresenter();
+  }
+
+  function updatePresenter() {
+    var s = slides[idx];
+    if (!s) return;
+    var note = s.querySelector('.speaker-notes');
+    var title = s.getAttribute('data-title') || ('Slide ' + (idx + 1));
+    presenterTitle.textContent = title + ' — speaker notes';
+    presenterContent.innerHTML = note ? note.innerHTML : 'No notes for this slide.';
+  }
+
+  function bump(d) { show(idx + d); }
+
+  if (prevBtn) prevBtn.addEventListener('click', function () { bump(-1); });
+  if (nextBtn) nextBtn.addEventListener('click', function () { bump(+1); });
+  if (notesBtn) notesBtn.addEventListener('click', function () {
+    document.body.classList.toggle('presenter-on');
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+    switch (e.key) {
+      case 'ArrowRight': case 'PageDown': case ' ': bump(+1); e.preventDefault(); break;
+      case 'ArrowLeft': case 'PageUp': bump(-1); e.preventDefault(); break;
+      case 'Home': show(0); e.preventDefault(); break;
+      case 'End': show(total - 1); e.preventDefault(); break;
+      case 'n': case 'N': document.body.classList.toggle('presenter-on'); break;
+      case 'p': case 'P': window.print(); break;
+      case 'Escape': document.body.classList.remove('presenter-on'); break;
+    }
+  });
+
+  var touchStart = null;
+  document.addEventListener('touchstart', function (e) {
+    if (e.touches.length === 1) touchStart = e.touches[0].clientX;
+  }, { passive: true });
+  document.addEventListener('touchend', function (e) {
+    if (touchStart === null) return;
+    var dx = e.changedTouches[0].clientX - touchStart;
+    if (Math.abs(dx) > 60) bump(dx < 0 ? +1 : -1);
+    touchStart = null;
+  }, { passive: true });
+
+  function showFromHash() {
+    var m = (location.hash || '').match(/#slide-(\d+)/);
+    if (m) show(parseInt(m[1], 10) - 1);
+  }
+  window.addEventListener('hashchange', showFromHash);
+  if (location.hash) showFromHash(); else show(0);
+})();
+</script>
+</body>
+</html>

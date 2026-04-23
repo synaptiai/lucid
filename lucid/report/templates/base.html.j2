@@ -6,75 +6,1430 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lucid audit — {{ audit.id }}</title>
 <style>
+  /* ─────────────────────────────────────────────────────────────────
+     Editorial intelligence brief — Lucid audit report
+     Aesthetic: cream paper, system-serif display, sans body.
+     CSP locks scripts entirely; visualisation is inline SVG.
+     System fonts only — the report is a single static HTML file with
+     no external resources, no @font-face, no tracking pixels.
+     ───────────────────────────────────────────────────────────────── */
   :root {
-    --fg: #1a1a1a;
-    --muted: #777;
-    --border: #ddd;
-    --accent: #335580;
-    --accent-soft: #8aaad0;
-    --bg: #ffffff;
-    --bg-alt: #fafafa;
-    --warn-bg: #fff3cd;
-    --warn-border: #ffc107;
-    --partial-bg: #fde8d0;
-    --partial-border: #e68c00;
-    --empty: #8a8a8a;
+    --bg: #f8f4ec;          /* warm paper cream */
+    --bg-card: #fefcf7;     /* slightly brighter card surface */
+    --bg-deep: #efe8d9;     /* deep inset (quotes, evidence) */
+    --rule: #d9d0bc;        /* horizontal rule / borders */
+    --rule-soft: #e6dfce;
+    --ink: #14110d;         /* near-black warm */
+    --ink-soft: #2c2823;
+    --slate: #4a5160;       /* muted text */
+    --slate-soft: #8b8678;
+    --severity-high: #9b1c1c;   /* oxide red — intensity 3 / contradicted */
+    --severity-mid: #b45309;    /* amber — intensity 2 / weakly-supported */
+    --severity-low: #1d3a5e;    /* ink blue — intensity 1 */
+    --positive: #2d5a3d;        /* moss — stable / supported */
+    --neutral: #8b8678;
+    --accent: #a64a2e;          /* rust accent */
+    --accent-soft: #d8a48c;
   }
   * { box-sizing: border-box; }
+  html { background: var(--bg); }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-                 Helvetica, Arial, sans-serif;
-    color: var(--fg);
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
+                 "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
     background: var(--bg);
-    max-width: 1100px;
+    max-width: 1180px;
     margin: 0 auto;
-    padding: 2rem 1.5rem 4rem;
-    line-height: 1.5;
+    padding: 3rem 2rem 4rem;
+    line-height: 1.55;
+    font-size: 16px;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
   }
-  h1, h2, h3, h4 { line-height: 1.3; }
-  h1 { margin-top: 0; font-size: 1.8rem; }
-  h2 { font-size: 1.4rem; margin-top: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
-  h3 { font-size: 1.1rem; margin-top: 1.5rem; }
-  h4 { font-size: 0.95rem; font-weight: 600; color: var(--muted); margin-top: 1.2rem; }
-  code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 0.9em; }
-  pre { background: var(--bg-alt); padding: 0.6rem 0.8rem; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
-  table { border-collapse: collapse; width: 100%; margin: 0.6rem 0 1.2rem; font-size: 0.92rem; }
-  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
-  th { background: var(--bg-alt); font-weight: 600; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  details { margin: 0.4rem 0; }
-  summary { cursor: pointer; color: var(--accent); font-weight: 600; }
-  blockquote { border-left: 3px solid var(--accent-soft); margin: 0.5rem 0; padding: 0.2rem 0.9rem; color: var(--fg); background: var(--bg-alt); }
-  .muted { color: var(--muted); font-size: 0.92rem; }
-  .partial-banner { background: var(--partial-bg); border: 1px solid var(--partial-border); padding: 0.8rem 1rem; border-radius: 4px; margin-bottom: 1.5rem; }
-  .status-badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 3px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-left: 0.4rem; }
-  .status-ran       { background: #e0f0e0; color: #2a662a; }
-  .status-empty     { background: #eeeeee; color: #666; }
-  .status-incomplete{ background: var(--warn-bg); color: #755a00; border: 1px solid var(--warn-border); }
-  .empty-state { color: var(--empty); font-style: italic; padding: 0.5rem 0; }
-  .meta-grid { display: grid; grid-template-columns: 10rem auto; gap: 0.3rem 1rem; font-size: 0.93rem; margin: 1rem 0; }
-  .meta-grid dt { color: var(--muted); }
-  .meta-grid dd { margin: 0; }
-  .footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.82rem; color: var(--muted); }
-  .footer a { color: var(--accent); text-decoration: none; }
-  .footer a:hover { text-decoration: underline; }
-  .explanation { color: var(--fg); }
-  .quote-label { color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.5rem; }
-  .evidence-list { margin: 0.2rem 0; padding-left: 1.2rem; }
-  .evidence-list li { margin: 0.1rem 0; }
-  .toc-list { list-style: none; padding: 0; font-size: 0.95rem; columns: 2; column-gap: 2rem; }
-  .toc-list li { break-inside: avoid; margin: 0.2rem 0; }
-  .intensity-cell { display: inline-block; width: 1.2rem; text-align: center; font-weight: 600; }
-  .intensity-1 { color: #5a7a9a; }
-  .intensity-2 { color: #d68a00; }
-  .intensity-3 { color: #b94a4a; }
+
+  /* Display typography — system serif (NY on macOS, Charter / Georgia
+     elsewhere). No webfonts; CSP would block them anyway. */
+  .serif, h1, h2, h3, .display, .pull-num {
+    font-family: ui-serif, "New York", Charter, "Source Serif Pro", "Iowan Old Style",
+                 "Apple Garamond", Georgia, serif;
+    font-feature-settings: "ss01", "ss02";
+  }
+
+  h1 {
+    font-size: clamp(2.2rem, 4vw, 3rem);
+    font-weight: 600;
+    line-height: 1.05;
+    margin: 0 0 0.4rem;
+    letter-spacing: -0.01em;
+  }
+  h2 {
+    font-size: 1.55rem;
+    font-weight: 600;
+    line-height: 1.2;
+    margin: 3rem 0 1rem;
+    letter-spacing: -0.005em;
+  }
+  h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 1.4rem 0 0.5rem;
+  }
+  p { margin: 0.6rem 0; }
+  code, pre, .mono {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em;
+  }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+  a:hover { border-bottom-color: var(--accent); }
+
+  /* Section eyebrow — small, all-caps lead-ins above section titles. */
+  .eyebrow {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--slate);
+    font-weight: 600;
+    margin: 0 0 0.4rem;
+  }
+  hr.rule {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 2.5rem 0;
+  }
+  .muted { color: var(--slate); font-size: 0.92rem; }
+
+  /* ───── Hero ─────
+     Newspaper-masthead pattern: uppercase micro-kerning lead-in,
+     oversized serif slug, then the intelligence-brief deck. The
+     lead paragraph gets a Tufte-style drop cap to anchor the eye. */
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
+    gap: 3rem;
+    align-items: end;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 2rem;
+    position: relative;
+  }
+  .hero-masthead {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--slate);
+    font-weight: 700;
+    margin: 0 0 0.75rem;
+    padding-bottom: 0.55rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  .hero-masthead .mast-volume {
+    font-family: ui-serif, Georgia, serif;
+    font-style: italic;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    color: var(--ink-soft);
+  }
+  .hero-masthead .mast-divider {
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+    margin: 0 0.3rem;
+  }
+  .hero-headline {
+    font-size: clamp(1.05rem, 1.6vw, 1.35rem);
+    line-height: 1.5;
+    color: var(--ink-soft);
+    font-weight: 400;
+    margin: 1.2rem 0 0;
+    max-width: 44ch;
+  }
+  .hero-headline::first-letter {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 3.6em;
+    font-weight: 600;
+    float: left;
+    line-height: 0.85;
+    margin: 0.1em 0.12em 0 0;
+    color: var(--accent);
+  }
+  .hero-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.4rem 1.6rem;
+    margin: 1.4rem 0 0;
+    padding: 1.2rem 1.4rem;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+  }
+  .hero-stat .stat-num {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 2.4rem;
+    line-height: 1;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: -0.02em;
+  }
+  .hero-stat .stat-label {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--slate);
+    margin-top: 0.35rem;
+    font-weight: 600;
+  }
+
+  /* ───── Status pill (top of hero meta line) ───── */
+  .status-pill {
+    display: inline-block;
+    padding: 0.18rem 0.65rem;
+    border-radius: 2px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+  }
+  .status-completed { background: #e0ead8; color: var(--positive); }
+  .status-partial,
+  .status-aborted-pre-spend { background: #f6e1cb; color: var(--severity-mid); }
+  .status-failed { background: #f1d6d3; color: var(--severity-high); }
+  .status-running { background: #e1dccc; color: var(--slate); }
+
+  /* ───── Partial-run banner ───── */
+  .partial-banner {
+    background: #fdf2e0;
+    border: 1px solid #e6c79b;
+    border-left: 4px solid var(--severity-mid);
+    padding: 0.9rem 1.2rem;
+    margin: 1.5rem 0 2rem;
+    font-size: 0.95rem;
+  }
+
+  /* ───── Sample disclosure ─────
+     Sits under the hero status line. Tells the reader exactly which
+     slice of the corpus the audit covers vs. what was excluded by
+     the sampling filter. Restrained — italic, slate, no chrome. */
+  .sample-disclosure {
+    margin: 0.6rem 0 1.5rem;
+    padding: 0.55rem 0.85rem;
+    background: transparent;
+    border-left: 2px solid var(--rule);
+    font-size: 0.86rem;
+    color: var(--ink-soft);
+    line-height: 1.55;
+  }
+  .sample-disclosure .sd-line { margin: 0; }
+  .sample-disclosure .sd-label {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--slate);
+    font-weight: 700;
+    margin-right: 0.5rem;
+  }
+  .sample-disclosure strong { color: var(--ink); font-weight: 600; }
+  .sample-disclosure em {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-style: italic;
+    color: var(--severity-mid);
+  }
+
+  /* ───── Figure captions (Fig. N style, Tufte / Foreign Affairs) ─────
+     Every inline-SVG visualisation gets a small caption line that
+     reads like a journal figure legend: bold numeral, italic verb,
+     terse description. Anchors the chart to the narrative. */
+  figure {
+    margin: 1.4rem 0 2rem;
+  }
+  figure.inline { margin: 0.8rem 0 1.4rem; }
+  figcaption {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--slate);
+    margin-top: 0.55rem;
+    padding-left: 0.8rem;
+    border-left: 2px solid var(--rule-soft);
+    max-width: 62ch;
+  }
+  figcaption .fig-num {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-weight: 700;
+    font-style: italic;
+    color: var(--ink);
+    letter-spacing: 0.02em;
+  }
+  figcaption em { color: var(--ink-soft); font-style: italic; }
+
+  /* ───── Sidenote / marginalia (Tufte) ─────
+     A boxed aside that explains methodology inline, without breaking
+     the narrative flow. On wide screens it can float right; on narrow
+     screens it sits in the column. Used sparingly — once per report
+     for "how to read this". */
+  .sidenote {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--ink);
+    padding: 1rem 1.2rem;
+    margin: 1.5rem 0;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    color: var(--ink-soft);
+  }
+  .sidenote .sn-title {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0 0 0.35rem;
+    font-style: italic;
+  }
+  .sidenote .sn-key {
+    display: grid;
+    grid-template-columns: 1.1rem minmax(0, 1fr);
+    gap: 0.35rem 0.6rem;
+    margin: 0.55rem 0 0;
+  }
+  .sidenote .sn-key .swatch {
+    width: 0.9rem;
+    height: 0.9rem;
+    border-radius: 2px;
+    align-self: center;
+  }
+  .sidenote .sn-key .swatch.open {
+    background: transparent;
+    border: 1px solid var(--rule);
+  }
+  .sidenote .sn-key span { font-size: 0.84rem; color: var(--ink-soft); }
+  .sidenote .sn-key strong { color: var(--ink); font-weight: 600; }
+
+  /* ───── Conversation Fingerprint (signature moment) ─────
+     A mosaic of cells, one per sampled conversation. Loud cells
+     (findings) render as coloured squares; clean cells render as
+     open outlines. The whole grid is the audit's signature — no two
+     audits look alike. Sits above the fold on the first impression. */
+  .fingerprint {
+    margin: 2rem 0 1rem;
+    padding: 1.2rem 1.4rem 0.9rem;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    position: relative;
+  }
+  .fingerprint::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: -1px;
+    width: 42px;
+    height: 4px;
+    background: var(--accent);
+  }
+  .fingerprint-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+  }
+  .fingerprint-head h3 {
+    margin: 0;
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 1.1rem;
+    font-weight: 600;
+    font-style: italic;
+    letter-spacing: 0.01em;
+  }
+  .fingerprint-head .fp-meta {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--slate);
+  }
+  .fingerprint-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.9rem 1.4rem;
+    margin: 0.6rem 0 0;
+    font-size: 0.76rem;
+    color: var(--slate);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  .fingerprint-legend .lg {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .fingerprint-legend .swatch {
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 1px;
+  }
+  .fingerprint-legend .swatch.open {
+    background: transparent;
+    border: 1px solid var(--rule);
+  }
+
+  /* ───── Concern footprint section (primary radar) ─────
+     Hero educational visualisation. Two-column grid: the radar SVG
+     on the left, a dl legend on the right mapping spoke letters to
+     framework names. Sits above the fingerprint so the reader gets
+     the "what" before the "where". */
+  .concern-footprint {
+    margin: 2rem 0 1.2rem;
+    padding: 1.6rem 1.8rem 1.4rem;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+  }
+  .concern-footprint h2 {
+    margin: 0.3rem 0 0.6rem;
+    font-size: 1.4rem;
+    line-height: 1.25;
+  }
+  .concern-footprint p.muted {
+    max-width: 68ch;
+    margin: 0 0 1rem;
+    font-size: 0.92rem;
+    color: var(--ink-soft);
+  }
+  .concern-footprint p.muted em { font-style: italic; color: var(--ink); }
+  .concern-footprint p.muted strong { color: var(--ink); }
+  .footprint-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(200px, 0.9fr);
+    gap: 2rem;
+    align-items: center;
+    margin-top: 0.8rem;
+  }
+  .footprint-grid figure {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .footprint-grid figure svg {
+    max-width: 100%;
+    height: auto;
+  }
+  .footprint-grid figcaption {
+    margin-top: 0.7rem;
+    max-width: 36ch;
+    text-align: left;
+    align-self: flex-start;
+  }
+  .footprint-legend {
+    background: transparent;
+    padding: 0;
+  }
+  .footprint-legend dl {
+    display: grid;
+    grid-template-columns: 1.6rem minmax(0, 1fr);
+    gap: 0.45rem 0.6rem;
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.82rem;
+  }
+  .footprint-legend dt {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: 0.02em;
+    line-height: 1.2;
+  }
+  .footprint-legend dd {
+    margin: 0;
+    line-height: 1.35;
+    color: var(--ink-soft);
+  }
+  .footprint-legend dd strong {
+    color: var(--ink);
+    font-weight: 600;
+    font-size: 0.88rem;
+  }
+  .footprint-legend dd .muted {
+    display: block;
+    margin-top: 0.1rem;
+    font-size: 0.74rem;
+    color: var(--slate);
+  }
+
+  /* ───── Actionable summary — three concrete next steps ─────
+     Numbered list, magazine-style lead numerals, each item has a
+     headline + recommendation. Pairs with the radar directly below. */
+  .actionable-summary {
+    margin: 1.6rem 0 2rem;
+    padding: 1.5rem 1.8rem 1.2rem;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+  }
+  .actionable-summary h2 {
+    margin: 0.3rem 0 1rem;
+    font-size: 1.3rem;
+    line-height: 1.3;
+  }
+  .action-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 1.4rem;
+  }
+  .action {
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 1fr);
+    gap: 1rem;
+    padding-bottom: 1.2rem;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .action:last-child { border-bottom: 0; padding-bottom: 0; }
+  .action-num {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 2.2rem;
+    font-weight: 600;
+    font-style: italic;
+    color: var(--accent);
+    line-height: 1;
+  }
+  .action-body { min-width: 0; }
+  .action-title {
+    margin: 0 0 0.3rem;
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 1.05rem;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--ink);
+  }
+  .action-tag {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.12rem 0.5rem;
+    background: var(--bg-deep);
+    border: 1px solid var(--rule);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.66rem;
+    font-weight: 600;
+    font-style: normal;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--slate);
+    vertical-align: middle;
+  }
+  .action-stats {
+    margin: 0 0 0.4rem;
+    font-size: 0.82rem;
+    color: var(--slate);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  .action-stats strong { color: var(--ink); font-weight: 600; }
+  .action-recommendation {
+    margin: 0;
+    font-size: 0.95rem;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    max-width: 64ch;
+  }
+  .conv-rankings {
+    margin-top: 1.6rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--rule-soft);
+  }
+  .ranking-title {
+    margin: 0 0 0.7rem;
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 0.98rem;
+    font-weight: 600;
+    font-style: italic;
+    color: var(--ink);
+  }
+  .ranking-list {
+    list-style: decimal;
+    margin: 0;
+    padding-left: 1.4rem;
+    font-size: 0.85rem;
+    line-height: 1.7;
+    color: var(--ink-soft);
+  }
+  .ranking-list li { margin-bottom: 0.25rem; }
+  .ranking-list code {
+    background: var(--bg-deep);
+    padding: 0.05rem 0.35rem;
+    border-radius: 2px;
+    font-size: 0.82em;
+  }
+  .ranking-list .muted {
+    font-size: 0.78rem;
+    color: var(--slate);
+  }
+
+  /* ───── Secondary behaviour radar (inside Module A) ─────
+     Smaller, sits inside the module section. No numeric legend —
+     the spoke labels carry the behaviour name. */
+  .behaviour-radar {
+    margin: 1rem 0 1.4rem;
+    padding: 1rem 1.2rem 0.8rem;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    max-width: 560px;
+  }
+  .behaviour-radar h4 {
+    margin: 0 0 0.5rem;
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 0.98rem;
+    font-weight: 600;
+    font-style: italic;
+    color: var(--ink);
+  }
+  .behaviour-radar figure {
+    margin: 0;
+    display: flex;
+    justify-content: center;
+  }
+  .behaviour-radar figure svg {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* ───── Module H verdict summary (Phase 2.4) ─────
+     Single stacked bar showing memory-verdict distribution, plus a
+     category breakdown and the contradicted claims. Sits at the top
+     of the Module H section so the reader gets the "how healthy is
+     your memory" answer before drilling into individual findings. */
+  .h-summary {
+    display: grid;
+    gap: 1.2rem;
+    margin: 0.4rem 0 1.4rem;
+    padding: 1.1rem 1.3rem;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+  }
+  .h-source-intro {
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.55;
+    max-width: 72ch;
+    color: var(--ink-soft);
+  }
+  .h-source-intro em { font-style: italic; color: var(--ink); }
+  .h-source-intro strong { color: var(--severity-mid); font-weight: 600; }
+  .h-verdict-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+  }
+  .h-verdict-label {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 0.98rem;
+    font-weight: 600;
+    font-style: italic;
+    color: var(--ink);
+  }
+  .h-verdict-meta {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.74rem;
+    color: var(--slate);
+    letter-spacing: 0.01em;
+  }
+  .h-verdict-bar {
+    display: flex;
+    height: 26px;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+  }
+  .h-vseg {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #fefcf7;
+    min-width: 0;
+    border-right: 1px solid rgba(255,255,255,0.2);
+  }
+  .h-vseg:last-child { border-right: 0; }
+  .h-v-well-supported { background: #3e6a4c; }
+  .h-v-weakly-supported { background: #b45309; }
+  .h-v-unsupported { background: #7a2f2f; }
+  .h-v-contradicted { background: #9b1c1c; }
+  .h-v-insufficient-data { background: #8b8678; color: var(--ink); }
+  .h-v-out-of-scope { background: #b8b2a0; color: var(--ink); }
+  .h-verdict-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem 1.2rem;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.75rem;
+    color: var(--slate);
+  }
+  .h-vlg { display: inline-flex; align-items: center; gap: 0.4rem; }
+  .h-vlg-sw {
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 1px;
+  }
+  .h-categories { display: block; }
+  .h-cat-label {
+    display: block;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-weight: 700;
+    color: var(--slate);
+    margin-bottom: 0.45rem;
+  }
+  .h-cat-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.2rem;
+    font-size: 0.85rem;
+  }
+  .h-cat-list li { margin: 0; }
+  .h-cat-list strong { color: var(--ink); font-weight: 600; }
+  .h-contradicted { display: block; }
+  .h-contradicted-list {
+    margin: 0;
+    padding-left: 1.4rem;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+  }
+  .h-contradicted-list li { margin-bottom: 0.3rem; }
+
+  /* Confidence histogram (Phase 4A.3) */
+  .conf-hist {
+    margin-top: 1.4rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--rule-soft);
+  }
+  .conf-hist-title {
+    margin: 0 0 0.5rem;
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 0.98rem;
+    font-weight: 600;
+    font-style: italic;
+    color: var(--ink);
+  }
+  .conf-hist figure { margin: 0; }
+  .conf-hist figure svg { max-width: 100%; height: auto; }
+
+  /* Co-occurrence heatmap (Phase 4A.1) */
+  .cooccurrence {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    padding: 1.3rem 1.5rem;
+    margin: 2rem 0;
+  }
+  .cooccurrence h2 { margin: 0.2rem 0 0.5rem; font-size: 1.3rem; }
+  .cooccurrence p.muted { max-width: 70ch; font-size: 0.9rem; color: var(--ink-soft); }
+  .cooccurrence figure {
+    margin: 1rem 0 0;
+    overflow-x: auto;
+  }
+  .cooccurrence figure svg { max-width: 100%; height: auto; display: block; }
+
+  /* Narrow-viewport tuning for the two-column footprint grid. */
+  @media (max-width: 820px) {
+    .footprint-grid {
+      grid-template-columns: 1fr;
+      gap: 1.4rem;
+    }
+    .footprint-grid figcaption { max-width: none; }
+    .action {
+      grid-template-columns: 2.4rem minmax(0, 1fr);
+      gap: 0.7rem;
+    }
+    .action-num { font-size: 1.8rem; }
+  }
+
+  /* ───── At-a-glance section (module bar chart) ───── */
+  .glance {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    padding: 1.4rem 1.6rem;
+    margin: 2rem 0;
+  }
+  .glance-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    gap: 2rem;
+    align-items: start;
+  }
+  .glance-legend dl {
+    display: grid;
+    grid-template-columns: 2.4rem 1fr;
+    gap: 0.4rem 0.8rem;
+    margin: 0;
+    font-size: 0.88rem;
+  }
+  .glance-legend dt {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: 0.05em;
+  }
+  .glance-legend dd { margin: 0; color: var(--slate); }
+  .glance-legend dd strong { color: var(--ink); font-weight: 600; }
+
+  /* ───── Lede / lead finding ─────
+     The #1 headline gets a magazine-style pull treatment: oversized
+     serif quote, oxide-red eyebrow, restrained metadata strip.
+     Sets the tone of the whole report. */
+  .lede {
+    margin: 1.5rem 0 2rem;
+    padding: 1.6rem 1.8rem 1.4rem;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--severity-high);
+    position: relative;
+  }
+  .lede::before {
+    content: "№\00a001";
+    position: absolute;
+    top: -0.95rem;
+    left: 1.2rem;
+    background: var(--bg);
+    padding: 0 0.6rem;
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 0.78rem;
+    font-style: italic;
+    color: var(--severity-high);
+    letter-spacing: 0.06em;
+  }
+  .lede-eyebrow {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--severity-high);
+    font-weight: 700;
+    margin: 0 0 0.45rem;
+  }
+  .lede-title {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: clamp(1.45rem, 2.4vw, 2rem);
+    line-height: 1.18;
+    font-weight: 600;
+    margin: 0 0 0.65rem;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+  }
+  .lede-meta {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    align-items: center;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.74rem;
+    color: var(--slate);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 0 0 0.85rem;
+  }
+  .lede-quote {
+    margin: 0.8rem 0 0;
+    padding: 0.6rem 0 0.4rem 1.4rem;
+    border-left: 3px solid var(--severity-high);
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 1.08rem;
+    line-height: 1.55;
+    font-style: italic;
+    color: var(--ink-soft);
+    background: transparent;
+  }
+  .lede-quote::before {
+    content: "“";
+    color: var(--severity-high);
+    margin-right: 0.1rem;
+    font-size: 1.2em;
+  }
+  .lede-quote::after {
+    content: "”";
+    color: var(--severity-high);
+    margin-left: 0.1rem;
+    font-size: 1.2em;
+  }
+  .lede-quote-attr {
+    display: block;
+    margin-top: 0.45rem;
+    font-style: normal;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--slate);
+  }
+  .lede-explanation {
+    margin: 0.7rem 0 0;
+    font-size: 0.94rem;
+    color: var(--ink-soft);
+    line-height: 1.55;
+    max-width: 64ch;
+  }
+
+  /* ───── Headline findings (cross-module top picks) ───── */
+  .headline-list {
+    list-style: none;
+    padding: 0;
+    margin: 1rem 0 0;
+    counter-reset: headline;
+  }
+  .headline {
+    counter-increment: headline;
+    display: grid;
+    grid-template-columns: 3.5rem 1fr;
+    gap: 1.2rem;
+    padding: 1.4rem 0;
+    border-top: 1px solid var(--rule);
+  }
+  .headline:last-child { border-bottom: 1px solid var(--rule); }
+  .headline-num {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 1.6rem;
+    line-height: 1;
+    font-weight: 600;
+    color: var(--accent);
+    padding-top: 0.2rem;
+  }
+  .headline-num::before { content: counter(headline, decimal-leading-zero); }
+  .headline-title {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 1.2rem;
+    line-height: 1.3;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0 0 0.25rem;
+  }
+  .headline-meta {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.78rem;
+    color: var(--slate);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .headline-quote {
+    margin: 0.8rem 0 0;
+    padding: 0.8rem 1rem;
+    background: var(--bg-deep);
+    border-left: 3px solid var(--rule);
+    font-style: italic;
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 0.96rem;
+    color: var(--ink-soft);
+  }
+  .headline-quote::before { content: "“"; color: var(--slate-soft); margin-right: 0.15rem; }
+  .headline-quote::after { content: "”"; color: var(--slate-soft); margin-left: 0.15rem; }
+  .quote-attr {
+    display: block;
+    margin-top: 0.4rem;
+    font-style: normal;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.75rem;
+    color: var(--slate);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* Severity dot (used in .headline-meta) */
+  .sev-dot {
+    display: inline-block;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    margin-right: 0.15rem;
+    vertical-align: -1px;
+  }
+  .sev-high { background: var(--severity-high); }
+  .sev-mid { background: var(--severity-mid); }
+  .sev-low { background: var(--severity-low); }
+  .sev-neutral { background: var(--neutral); }
+
+  /* ───── Time / model attribution ───── */
+  .attribution {
+    display: grid;
+    grid-template-columns: minmax(0, 1.7fr) minmax(220px, 1fr);
+    gap: 2.4rem;
+    align-items: start;
+    margin-top: 1rem;
+  }
+  .attribution-models {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    padding: 1.2rem 1.4rem;
+    text-align: center;
+  }
+  .attribution-models h3 { margin-top: 0; }
+  .model-legend {
+    margin: 0.8rem 0 0;
+    padding: 0;
+    list-style: none;
+    text-align: left;
+    font-size: 0.86rem;
+  }
+  .model-legend li {
+    display: grid;
+    grid-template-columns: 0.8rem 1fr auto;
+    gap: 0.55rem;
+    align-items: baseline;
+    padding: 0.25rem 0;
+    border-top: 1px solid var(--rule-soft);
+  }
+  .model-legend li:first-child { border-top: 0; }
+  .model-legend .swatch {
+    width: 0.6rem;
+    height: 0.6rem;
+    align-self: center;
+    border-radius: 1px;
+  }
+  .model-legend code { color: var(--ink-soft); }
+
+  /* ───── Module sections ───── */
+  .module {
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--rule);
+  }
+  .module-head { display: flex; align-items: baseline; gap: 0.9rem; flex-wrap: wrap; }
+  .module-head h2 { margin: 0; }
+  .module-letter {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 2.2rem;
+    line-height: 1;
+    font-weight: 600;
+    color: var(--accent);
+    margin-right: 0.4rem;
+  }
+  .module-status {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 0.18rem 0.55rem;
+    border-radius: 2px;
+    font-weight: 700;
+  }
+  .ms-ran { background: #e0ead8; color: var(--positive); }
+  .ms-empty { background: #ebe5d4; color: var(--slate); }
+  .ms-incomplete { background: #fdecd3; color: var(--severity-mid); border: 1px solid #e6c79b; }
+
+  .module-description { color: var(--slate); margin: 0.4rem 0 1rem; max-width: 70ch; font-size: 0.88rem; font-style: italic; }
+
+  /* ───── About-this-module block (educational explainer) ─────
+     Four short paragraphs: hook question + three labelled dl rows.
+     Sits between the one-line module description and the behaviour
+     summary table. Source-authored content (MODULE_EXPLAINERS in
+     generator.py); rendered with `|safe` so the handful of inline
+     <em>/<code> tags in source show up correctly. No user content. */
+  .module-about {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--ink);
+    padding: 1rem 1.2rem;
+    margin: 0 0 1.4rem;
+    max-width: 74ch;
+  }
+  .module-about .mod-hook {
+    margin: 0 0 0.7rem;
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 1.02rem;
+    line-height: 1.35;
+    color: var(--ink);
+  }
+  .module-about .mod-hook strong {
+    font-weight: 600;
+    font-style: italic;
+  }
+  .module-about .mod-explainer {
+    display: grid;
+    grid-template-columns: minmax(140px, auto) minmax(0, 1fr);
+    gap: 0.5rem 1rem;
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+  .module-about .mod-explainer dt {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--slate);
+    font-weight: 700;
+    padding-top: 0.15rem;
+  }
+  .module-about .mod-explainer dd {
+    margin: 0;
+    color: var(--ink-soft);
+  }
+  .module-about .mod-explainer dd code {
+    background: var(--bg-deep);
+    padding: 0.05rem 0.35rem;
+    border-radius: 2px;
+    font-size: 0.85em;
+  }
+  @media (max-width: 620px) {
+    .module-about .mod-explainer {
+      grid-template-columns: 1fr;
+      gap: 0.15rem 0;
+    }
+    .module-about .mod-explainer dt { padding-top: 0.7rem; }
+    .module-about .mod-explainer dt:first-of-type { padding-top: 0; }
+  }
+  .empty-line { color: var(--slate); font-style: italic; margin: 0.6rem 0; }
+
+  /* Per-behavior summary table inside a module section. */
+  table.behaviour {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.8rem 0 1.6rem;
+    font-size: 0.92rem;
+  }
+  table.behaviour th, table.behaviour td {
+    text-align: left;
+    padding: 0.55rem 0.7rem;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: middle;
+  }
+  table.behaviour th {
+    background: transparent;
+    font-weight: 600;
+    color: var(--slate);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-bottom: 1px solid var(--rule);
+  }
+  table.behaviour td.num, table.behaviour th.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  table.behaviour .behaviour-bar {
+    height: 6px;
+    background: var(--rule-soft);
+    border-radius: 1px;
+    width: 100%;
+    max-width: 180px;
+    overflow: hidden;
+  }
+  table.behaviour .behaviour-bar > span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+  }
+  table.behaviour .behaviour-bar.sev-high > span { background: var(--severity-high); }
+  table.behaviour .behaviour-bar.sev-mid > span { background: var(--severity-mid); }
+  table.behaviour .behaviour-bar.sev-low > span { background: var(--severity-low); }
+  table.behaviour .behaviour-bar.sev-neutral > span { background: var(--neutral); }
+  table.behaviour .plain-en { color: var(--ink-soft); }
+
+  /* ───── Finding cards (top findings inside each module) ───── */
+  .find-list { margin: 1rem 0 0; padding: 0; list-style: none; }
+  .find {
+    border: 1px solid var(--rule);
+    background: var(--bg-card);
+    padding: 1rem 1.2rem;
+    margin: 0.7rem 0;
+  }
+  .find-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.3rem;
+  }
+  .find-behaviour {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 0.85rem;
+    color: var(--ink);
+    font-weight: 600;
+    background: var(--bg-deep);
+    padding: 0.05rem 0.45rem;
+  }
+  .find-plain {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 1.05rem;
+    color: var(--ink);
+    line-height: 1.35;
+    margin: 0;
+  }
+  .find-meta {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    flex-wrap: wrap;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.74rem;
+    color: var(--slate);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 0.15rem;
+  }
+  .find-explanation { color: var(--ink-soft); margin: 0.5rem 0 0.2rem; font-size: 0.93rem; }
+
+  /* ───── Interpretation block (Phase 1.3) ─────
+     Two-row "Why it matters" / "What to consider" layered on every
+     finding card. Kept tight visually — two tiny eyebrow-style
+     labels with prose beneath. Different vertical rhythm from the
+     mechanical .find-explanation line so readers can skip ahead to
+     the interpretation if they don't need the raw detection log. */
+  .interp {
+    margin: 0.8rem 0 0.6rem;
+    padding: 0.8rem 0.9rem;
+    background: var(--bg-deep);
+    border-left: 2px solid var(--accent-soft);
+    display: grid;
+    gap: 0.6rem;
+  }
+  .interp-row { display: block; }
+  .interp-label {
+    display: block;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--slate);
+    font-weight: 700;
+    margin-bottom: 0.2rem;
+  }
+  .interp-text {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    max-width: 72ch;
+  }
+  /* On the lede card, interpretation sits right under the pulled
+     quote — give it a bit more breathing room. */
+  .lede .interp {
+    margin-top: 1rem;
+    padding: 1rem 1.1rem;
+  }
+  .find-quote {
+    margin: 0.7rem 0 0;
+    padding: 0.7rem 0.9rem;
+    background: var(--bg-deep);
+    border-left: 3px solid var(--rule);
+    font-style: italic;
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 0.94rem;
+    color: var(--ink-soft);
+  }
+  .find-quote.user { border-left-color: var(--severity-low); }
+  .find-quote.assistant { border-left-color: var(--accent); }
+  .find-quote.evidence { border-left-color: var(--neutral); }
+  .find-quote-label {
+    display: block;
+    margin-bottom: 0.2rem;
+    font-style: normal;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.7rem;
+    color: var(--slate);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .find-prov {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-top: 0.7rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--rule-soft);
+    font-size: 0.74rem;
+    color: var(--slate);
+  }
+  .find-prov code { color: var(--slate); }
+
+  /* Per-finding confidence rendering. */
+  .conf-pair {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--slate);
+  }
+
+  /* ───── Evidence blocks (semantically labelled) ─────
+     Each finding renders an ordered stack of evidence: claim subject,
+     model reasoning, then quotes / corpus excerpts. The label colour
+     keys to the role so readers can scan: claim = ink-blue (subject),
+     reasoning = rust (interpretation), assistant = amber (offending
+     turn), user = neutral (challenge / prompt), evidence = moss
+     (corpus support). */
+  .evidence {
+    margin: 0.7rem 0 0;
+    padding: 0.65rem 0.95rem;
+    background: var(--bg-deep);
+    border-left: 3px solid var(--rule);
+  }
+  .evidence-label {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    color: var(--slate);
+    margin-bottom: 0.35rem;
+  }
+  .evidence-meta {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.72rem;
+    color: var(--slate-soft);
+    margin: -0.25rem 0 0.3rem;
+    letter-spacing: 0.02em;
+  }
+  .evidence-text {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    font-style: italic;
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-size: 0.94rem;
+    color: var(--ink-soft);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .evidence-text::before { content: "“"; color: var(--slate-soft); margin-right: 0.1rem; }
+  .evidence-text::after { content: "”"; color: var(--slate-soft); margin-left: 0.1rem; }
+
+  /* Role-specific accents — left bar colour signals the kind of
+     evidence at a glance. */
+  .evidence-claim       { border-left-color: var(--severity-low); background: #ecf0f7; }
+  .evidence-claim .evidence-label { color: var(--severity-low); }
+  .evidence-reasoning   { border-left-color: var(--accent); background: #f6ecdf; }
+  .evidence-reasoning .evidence-label { color: var(--accent); }
+  .evidence-reasoning .evidence-text {
+    /* Reasoning is prose, not a quote — drop the curly quotes. */
+    font-style: normal;
+  }
+  .evidence-reasoning .evidence-text::before,
+  .evidence-reasoning .evidence-text::after { content: ""; margin: 0; }
+  .evidence-assistant   { border-left-color: var(--severity-mid); }
+  .evidence-assistant .evidence-label { color: var(--severity-mid); }
+  .evidence-user        { border-left-color: var(--severity-low); }
+  .evidence-user .evidence-label { color: var(--severity-low); }
+  .evidence-evidence    { border-left-color: var(--positive); }
+  .evidence-evidence .evidence-label { color: var(--positive); }
+  .evidence-empty       {
+    border-left-color: var(--neutral);
+    background: transparent;
+    border-top: 1px dashed var(--rule);
+    border-bottom: 1px dashed var(--rule);
+    border-right: 1px dashed var(--rule);
+  }
+  .evidence-empty .evidence-label { color: var(--neutral); }
+  .evidence-empty-text {
+    margin: 0;
+    color: var(--slate);
+    font-size: 0.9rem;
+    font-style: italic;
+  }
+
+  /* ───── Provenance footer (verify-where strip) ─────
+     Two-column dl: dt = label (uppercase, slate), dd = value (mono).
+     Always visible so the reader knows the finding is auditable
+     against the underlying SQLite corpus. */
+  .provenance {
+    display: grid;
+    grid-template-columns: 7rem minmax(0, 1fr);
+    gap: 0.2rem 0.9rem;
+    margin: 0.9rem 0 0;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--rule-soft);
+    font-size: 0.78rem;
+  }
+  .provenance dt {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--slate);
+    font-weight: 600;
+  }
+  .provenance dd {
+    margin: 0;
+    color: var(--ink-soft);
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+  }
+  .provenance dd code {
+    color: var(--ink-soft);
+    background: transparent;
+  }
+
+  /* ───── Sections nav ───── */
+  .toc {
+    list-style: none;
+    padding: 0;
+    margin: 1rem 0 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.5rem 1.2rem;
+    font-size: 0.92rem;
+  }
+  .toc li { padding: 0.3rem 0; border-bottom: 1px dotted var(--rule-soft); }
+  .toc .count { color: var(--slate); font-variant-numeric: tabular-nums; }
+
+  /* ───── Footer ───── */
+  .footer {
+    margin-top: 4rem;
+    padding-top: 1.2rem;
+    border-top: 2px solid var(--rule);
+    font-size: 0.82rem;
+    color: var(--slate);
+  }
+  .footer p { margin: 0.3rem 0; }
+  .footer .colophon {
+    font-family: ui-serif, "New York", Charter, Georgia, serif;
+    font-style: italic;
+    font-size: 0.9rem;
+  }
+
+  /* Wider screens get a touch more breathing room. */
+  @media (min-width: 1300px) {
+    body { max-width: 1240px; padding-left: 3rem; padding-right: 3rem; }
+  }
+  /* Narrow screens collapse the asymmetric grids. */
+  @media (max-width: 880px) {
+    .hero, .glance-grid, .attribution { grid-template-columns: 1fr; gap: 1.5rem; }
+    .hero-stats { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  /* Print: keep section breaks together and drop card chrome. */
+  @media print {
+    body { background: #ffffff; max-width: none; padding: 0.6in; font-size: 11pt; }
+    .module { page-break-inside: avoid; }
+    .find { page-break-inside: avoid; }
+    .glance, .attribution-models, .find { background: #ffffff; }
+  }
 </style>
 </head>
 <body>
 {% block body %}{% endblock %}
 <div class="footer">
-  <p>Generated by <strong>Lucid</strong> — open-source epistemic audit tool for personal AI conversation history. MIT license.</p>
-  <p>This report is a static HTML artifact. It contains no scripts, no external resources, and no tracking.</p>
+  <p class="colophon">Lucid — open-source epistemic audit for personal AI conversation history.</p>
+  <p>Static HTML artifact. No scripts, no external resources, no tracking. MIT license.</p>
 </div>
 </body>
 </html>

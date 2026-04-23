@@ -1,200 +1,873 @@
 {% extends "base.html.j2" %}
 
 {% block body %}
-<h1>Lucid audit report</h1>
-<p class="muted">
-  Run <code>{{ audit.id }}</code> &middot;
-  Started {{ audit.started_at.isoformat() }}
-  {% if audit.completed_at %} &middot; Completed {{ audit.completed_at.isoformat() }}{% endif %}
-  &middot; Status
-  {% if audit.status == 'partial' or audit.status == 'aborted_pre_spend' %}
-    <span class="status-badge status-incomplete">{{ audit.status }}</span>
-  {% elif audit.status == 'completed' %}
-    <span class="status-badge status-ran">{{ audit.status }}</span>
-  {% else %}
-    <span class="status-badge status-empty">{{ audit.status }}</span>
+
+{# ───── Hero — masthead, deck, four pillar stats ─────
+   The masthead reads like a journal volume line; the deck takes a
+   drop-cap into a single-paragraph intelligence brief. #}
+<header class="hero">
+  <div class="hero-text">
+    <p class="hero-masthead">
+      <span>Lucid Epistemic Audit</span>
+      <span class="mast-divider"></span>
+      <span class="mast-volume">Run №&nbsp;{{ audit.id }}</span>
+    </p>
+    <h1 class="serif">An audit of how your assistant talked to you</h1>
+    <p class="hero-headline">
+      {%- if aggregate.behaviour_total > 0 -%}
+        Lucid read every turn of {{ audit.corpus_stats.sampled_conversations }}
+        sampled conversation{% if audit.corpus_stats.sampled_conversations != 1 %}s{% endif %}
+        ({{ audit.corpus_stats.sampled_turns }} turns) and surfaced
+        <strong>{{ aggregate.behaviour_total }}</strong>
+        behaviour finding{% if aggregate.behaviour_total != 1 %}s{% endif %}
+        across <strong>{{ aggregate.modules_with_findings }}</strong> of
+        {{ aggregate.modules_total }} detection modules. Each finding cites a
+        published research framework and is auditable against the conversation
+        SQLite store the run produced.
+      {%- else -%}
+        Lucid read every turn of {{ audit.corpus_stats.sampled_conversations }}
+        sampled conversation{% if audit.corpus_stats.sampled_conversations != 1 %}s{% endif %}
+        ({{ audit.corpus_stats.sampled_turns }} turns). Every behaviour module
+        ran without surfacing a finding worth flagging. For directive
+        code-and-task corpora this is informative, not unusual.
+      {%- endif -%}
+    </p>
+  </div>
+  <aside class="hero-stats">
+    <div class="hero-stat">
+      <div class="stat-num">{{ aggregate.behaviour_total }}</div>
+      <div class="stat-label">behaviour findings</div>
+    </div>
+    <div class="hero-stat">
+      <div class="stat-num">{{ audit.corpus_stats.sampled_conversations }}</div>
+      <div class="stat-label">conversations</div>
+    </div>
+    <div class="hero-stat">
+      <div class="stat-num">{{ audit.corpus_stats.sampled_turns }}</div>
+      <div class="stat-label">turns audited</div>
+    </div>
+    <div class="hero-stat">
+      <div class="stat-num">{{ aggregate.modules_with_findings }}<span style="color: var(--slate-soft); font-size: 0.5em;"> / {{ aggregate.modules_total }}</span></div>
+      <div class="stat-label">modules firing</div>
+    </div>
+  </aside>
+</header>
+
+<p class="muted" style="margin-bottom: 0;">
+  {% set status_class = "status-" + audit.status.replace("_", "-") %}
+  <span class="status-pill {{ status_class }}">{{ audit.status }}</span>
+  &nbsp;Started {{ audit.started_at.strftime("%Y-%m-%d %H:%M UTC") }}
+  {% if audit.completed_at %} &middot; completed {{ audit.completed_at.strftime("%Y-%m-%d %H:%M UTC") }}{% endif %}
+  {% if audit.corpus_stats.date_range_start and audit.corpus_stats.date_range_end %}
+    &middot; corpus spans {{ audit.corpus_stats.date_range_start.date().isoformat() }}
+    → {{ audit.corpus_stats.date_range_end.date().isoformat() }}
   {% endif %}
+  &middot; sources: {% for s in audit.sources %}{{ s.value }}{% if not loop.last %}, {% endif %}{% endfor %}
 </p>
+
+{# ───── Sample disclosure — what was audited vs what was excluded ─────
+   The reader needs to know up front what slice of the corpus the
+   findings actually cover. We surface the pre-filter pool size, the
+   excluded short-conversation count, and the exact filter rule. #}
+{% set _pool = audit.sampling_config.n %}
+{% set _sampled = audit.corpus_stats.sampled_conversations %}
+{% set _dropped = (_pool - _sampled) if _pool >= _sampled else 0 %}
+{% if _dropped > 0 or _pool > 0 %}
+<aside class="sample-disclosure" aria-label="Sample disclosure">
+  <p class="sd-line">
+    <span class="sd-label">Sample</span>
+    <strong>{{ _sampled }}</strong> of <strong>{{ _pool }}</strong>
+    conversation{% if _pool != 1 %}s{% endif %} audited
+    {% if _dropped > 0 %}
+      &middot; <em>{{ _dropped }} excluded</em> (fewer than
+      {{ audit.sampling_config.min_turns }} turn{% if audit.sampling_config.min_turns != 1 %}s{% endif %} —
+      not enough exchange to develop an epistemic pattern)
+    {% endif %}
+  </p>
+</aside>
+{% endif %}
 
 {% if audit.status == 'partial' or audit.status == 'aborted_pre_spend' %}
 <div class="partial-banner">
-  <strong>Partial run.</strong> This audit did not complete every module.
-  Sections below marked <span class="status-badge status-incomplete">incomplete</span>
-  did not produce findings; their absence here does not mean no behaviour was
-  present in those conversations — only that the module did not run to
-  completion.
+  <strong>Partial run.</strong> One or more modules did not run to completion.
+  Sections marked <span class="module-status ms-incomplete">incomplete</span> below
+  have no findings — the absence does not mean the behaviour was absent, only
+  that the module did not finish.
   {% if audit.skipped_modules %}
-  Skipped modules: {% for m in audit.skipped_modules %}{{ m.value }}{% if not loop.last %}, {% endif %}{% endfor %}.
+  Skipped: {% for m in audit.skipped_modules %}<code>{{ m.value }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.
   {% endif %}
 </div>
 {% endif %}
 
-<dl class="meta-grid">
-  <dt>Sources</dt>
-  <dd>{% for s in audit.sources %}{{ s.value }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>
-  <dt>Conversations</dt>
-  <dd>
-    {{ audit.corpus_stats.discovered_conversations }} discovered,
-    {{ audit.corpus_stats.sampled_conversations }} sampled
-  </dd>
-  <dt>Turns</dt>
-  <dd>
-    {{ audit.corpus_stats.discovered_turns }} discovered,
-    {{ audit.corpus_stats.sampled_turns }} sampled
-  </dd>
-  {% if audit.corpus_stats.date_range_start and audit.corpus_stats.date_range_end %}
-  <dt>Date range</dt>
-  <dd>
-    {{ audit.corpus_stats.date_range_start.date().isoformat() }}
-    —
-    {{ audit.corpus_stats.date_range_end.date().isoformat() }}
-  </dd>
+{# ───── Concern Footprint — hero educational visualisation ─────
+   A radar / spider chart with one spoke per behaviour module (A, B,
+   C, D, E, F, H). Single-direction: larger polygon = more concern.
+   Each spoke is a problem-side aggregate (pushback / boundary-respect
+   and other protective behaviours are filtered out). The reader gets
+   the whole Lucid taxonomy in one visual without having to know which
+   module corresponds to which research framework. #}
+{% if aggregate.module_radar.axes %}
+<section class="concern-footprint" aria-labelledby="cf-h">
+  <p class="eyebrow" id="cf-h">Concern footprint</p>
+  <h2 class="serif">Where this corpus sits across seven epistemic dimensions</h2>
+  <p class="muted">
+    Each spoke is one Lucid detection module. Bar <em>length</em>
+    encodes how much that module found (total findings, √-scaled so a
+    heavy module doesn't crush the others). Bar <em>colour</em>
+    encodes severity mix — neutral / protective at the centre, then
+    low-severity concerns, mid, and high-severity red at the tip.
+    <strong>A long grey bar</strong> means the module fired often but
+    found nothing concerning (healthy). <strong>A short red-tipped
+    bar</strong> means few findings but serious ones. <strong>A spoke
+    with only a dot</strong> means the module ran cleanly — no
+    findings at all.
+  </p>
+  <div class="footprint-grid">
+    <figure class="inline">
+      {{ aggregate.module_radar | svg_radar | safe }}
+      <figcaption>
+        <span class="fig-num">Fig.&nbsp;1</span>&nbsp;&middot;
+        <em>Module activity by severity across
+        {{ aggregate.module_radar.corpus_size }} sampled
+        conversation{% if aggregate.module_radar.corpus_size != 1 %}s{% endif %}.</em>
+        Bar length = √(count / max-count). Segments stack from the
+        centre outward: neutral → low → mid → high.
+      </figcaption>
+    </figure>
+    <aside class="footprint-legend" aria-label="Module legend">
+      <dl>
+        {% for axis in aggregate.module_radar.axes %}
+        <dt>{{ axis.label }}</dt>
+        <dd>
+          <strong>{{ axis.legend }}</strong>
+          <br><span class="muted">{{ axis.total_count }} finding{% if axis.total_count != 1 %}s{% endif %}{% if axis.high_count %} · {{ axis.high_count }} high{% endif %}{% if axis.mid_count %} · {{ axis.mid_count }} mid{% endif %}{% if axis.low_count %} · {{ axis.low_count }} low{% endif %}{% if axis.neutral_count %} · {{ axis.neutral_count }} neutral{% endif %}</span>
+        </dd>
+        {% endfor %}
+      </dl>
+    </aside>
+  </div>
+</section>
+{% endif %}
+
+{# ───── Actionable Summary — three bullets pointing at real action ─────
+   Derived from the top-3 radar spokes. Each bullet names the module,
+   the concrete finding count, and a one-sentence recommendation that
+   doesn't require the reader to know the framework. #}
+{% if aggregate.top_actions %}
+<section class="actionable-summary" aria-labelledby="action-h">
+  <p class="eyebrow" id="action-h">What to do about this run</p>
+  <h2 class="serif">Three concrete next steps, ranked by signal strength</h2>
+  <ol class="action-list">
+    {% for action in aggregate.top_actions %}
+    <li class="action">
+      <div class="action-num">{{ loop.index }}</div>
+      <div class="action-body">
+        <h3 class="action-title">
+          {{ action.headline }}
+          <span class="action-tag">Module {{ action.module_short }} · {{ action.module_name }}</span>
+        </h3>
+        <p class="action-stats">
+          <strong>{{ action.finding_count }}</strong>
+          problem-side finding{% if action.finding_count != 1 %}s{% endif %}
+          {% if action.peak_intensity %}
+            &middot; peak intensity {{ action.peak_intensity }} / 3
+          {% endif %}
+          &middot; concern score {{ "%.2f"|format(action.score) }}
+        </p>
+        <p class="action-recommendation">{{ action.recommendation }}</p>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% if aggregate.conversation_rankings %}
+  <div class="conv-rankings">
+    <h3 class="ranking-title">Conversations to review first</h3>
+    <ol class="ranking-list">
+      {% for conv in aggregate.conversation_rankings %}
+      <li>
+        <code>{{ conv.conversation_short }}…</code>
+        <span class="muted">
+          · {{ conv.total_findings }} finding{% if conv.total_findings != 1 %}s{% endif %}
+          {% if conv.max_intensity %}· peak intensity {{ conv.max_intensity }}{% endif %}
+          · dominant Module {{ conv.dominant_module_short }}
+          · weighted score {{ "%.2f"|format(conv.weighted_score) }}
+        </span>
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
   {% endif %}
-  <dt>Total findings</dt>
-  <dd>{{ total }}</dd>
-  <dt>Schema version</dt>
-  <dd>{{ audit.schema_version }}</dd>
-</dl>
-
-<h2>Sections</h2>
-<ul class="toc-list">
-  {% for section in sections %}
-  <li><a href="#mod-{{ section.module.value }}">{{ section.name }}</a> ({{ section.count }})</li>
-  {% endfor %}
-</ul>
-
-<h2>Time / model attribution</h2>
-{% if model_buckets %}
-<h3>Findings per model</h3>
-<table>
-  <thead><tr><th>Model</th><th class="num">Count</th><th class="num">Avg confidence</th></tr></thead>
-  <tbody>
-  {% for bucket in model_buckets %}
-    <tr>
-      <td><code>{{ bucket.key }}</code></td>
-      <td class="num">{{ bucket.count }}</td>
-      <td class="num">{{ bucket.avg_confidence | conf }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% else %}
-<p class="empty-state">No model-attribution findings. Module G either did not run or found no Claude.ai conversations to attribute.</p>
+</section>
 {% endif %}
 
-{% if time_buckets %}
-<h3>Conversations per month</h3>
-<table>
-  <thead><tr><th>Month</th><th class="num">Count</th></tr></thead>
-  <tbody>
-  {% for bucket in time_buckets %}
-    <tr>
-      <td>{{ bucket.key }}</td>
-      <td class="num">{{ bucket.count }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+{# ───── Behaviour co-occurrence heatmap (Phase 4A.1) ─────
+   When two behaviours surface in the same conversation, that's a
+   diagnostic signal — the frameworks may be measuring related
+   phenomena. Heatmap is filtered to behaviours with ≥2 occurrences
+   so single-conversation artefacts don't inflate cells. #}
+{% if aggregate.cooccurrence %}
+<section class="cooccurrence" aria-labelledby="cooc-h">
+  <p class="eyebrow" id="cooc-h">Behaviour co-occurrence</p>
+  <h2 class="serif">Which problems travel together</h2>
+  <p class="muted">
+    When two behaviours land in the same conversation, that's a clue
+    they measure related phenomena. The cell at row X, column Y is
+    the Jaccard ratio: conversations where both occur divided by
+    conversations where either occurs. Darker = stronger
+    co-occurrence, 1.00 is the diagonal (every behaviour co-occurs
+    with itself).
+  </p>
+  <figure class="inline">
+    {{ aggregate.cooccurrence | svg_heatmap | safe }}
+    <figcaption>
+      <span class="fig-num">Fig.&nbsp;2</span>&nbsp;&middot;
+      <em>Cross-behaviour co-occurrence across
+      {{ aggregate.cooccurrence.n_conversations }}
+      conversation{% if aggregate.cooccurrence.n_conversations != 1 %}s{% endif %}.</em>
+      Behaviours are filtered to those appearing in at least
+      2 conversations; up to 14 rows/columns.
+    </figcaption>
+  </figure>
+</section>
 {% endif %}
 
-{% for section in sections %}
-<section id="mod-{{ section.module.value }}">
-  <h2>
-    {{ section.name }}
-    {% if section.status == 'ran' %}
-      <span class="status-badge status-ran">ran</span>
-    {% elif section.status == 'incomplete' %}
-      <span class="status-badge status-incomplete">incomplete</span>
-    {% else %}
-      <span class="status-badge status-empty">no findings</span>
+{# ───── Conversation Fingerprint — signature visual moment ─────
+   A mosaic where each cell = one sampled conversation. Loud cells
+   render with a fill colour matching worst severity; clean cells
+   render as small open outlines. Together they form a fingerprint
+   unique to this audit — the screenshot. #}
+{% if aggregate.fingerprint_total_conversations > 0 %}
+<section class="fingerprint" aria-labelledby="fp-h">
+  <div class="fingerprint-head">
+    <h3 id="fp-h">The conversation fingerprint of this corpus</h3>
+    <span class="fp-meta">
+      {{ aggregate.fingerprint | length }} loud
+      &middot; {{ aggregate.fingerprint_total_conversations - (aggregate.fingerprint | length) }} clean
+      &middot; {{ aggregate.fingerprint_total_conversations }} total
+    </span>
+  </div>
+  <figure class="inline">
+    {{ aggregate.fingerprint | svg_fingerprint(total_conversations=aggregate.fingerprint_total_conversations) | safe }}
+    <figcaption>
+      <span class="fig-num">Fig.&nbsp;3</span>&nbsp;&middot;
+      <em>Each cell, one conversation.</em>
+      Filled cells surfaced at least one behaviour finding; cell area scales
+      with finding density, fill colour with the worst severity in that
+      conversation. Open outlines mark conversations that ran cleanly. Hover
+      a cell to see its identifier and dominant module.
+    </figcaption>
+  </figure>
+  <div class="fingerprint-legend">
+    <span class="lg"><span class="swatch" style="background: #9b1c1c;"></span>High severity</span>
+    <span class="lg"><span class="swatch" style="background: #b45309;"></span>Mid severity</span>
+    <span class="lg"><span class="swatch" style="background: #1d3a5e;"></span>Low severity</span>
+    <span class="lg"><span class="swatch" style="background: #8b8678;"></span>Neutral</span>
+    <span class="lg"><span class="swatch open"></span>Clean — no findings</span>
+  </div>
+</section>
+{% endif %}
+
+{# ───── How to read this report — Tufte-style sidenote ─────
+   A one-time methodology key, set as marginalia. Saves the reader
+   from guessing what the colour-coding means and signals that the
+   findings are auditable, not editorial opinion. #}
+<aside class="sidenote" aria-label="How to read this report">
+  <p class="sn-title">How to read this report</p>
+  <p style="margin: 0 0 0.7rem;">
+    Every finding cites a published research framework
+    (<a href="https://eqbench.com/spiral-bench.html" rel="noopener noreferrer">Spiral-Bench v1.2</a>,
+    <a href="https://arxiv.org/abs/2310.13548" rel="noopener noreferrer">Sharma 2023</a>,
+    SycEval, <a href="https://arxiv.org/abs/2603.23848" rel="noopener noreferrer">BeliefShift</a>,
+    the <a href="https://github.com/synaptiai/influence-tactics-protocol" rel="noopener noreferrer">Influence Tactics Protocol</a>,
+    and <a href="https://arxiv.org/abs/2510.14400" rel="noopener noreferrer">MedTrust-RAG</a> for memory verification) and carries a
+    confidence value emitted by a Claude judge. The primary radar at the top of this report (<em>Concern Footprint</em>) rolls findings up to one score per module so you can see the whole taxonomy at a glance.
+  </p>
+  <p style="margin: 0 0 0.7rem;">
+    <strong>Severity colours</strong> mean different things across modules. For behaviour modules (A, B, C, D, E, F), severity tracks <em>intensity</em>: 3 = unambiguous hit, 1 = notable but mild. For Module H (memory-corpus consistency), severity tracks the <em>verdict</em>: contradicted and unsupported are high-concern; weakly-supported is mid; well-supported and insufficient-data are neutral. Module G (attribution) is always neutral — it's metadata, not a concern axis.
+  </p>
+  <p style="margin: 0 0 0.7rem;">
+    <strong>Confidence bars</strong> on each finding are the judge's reported probability that a careful human reviewer would agree with the label. When a Beta posterior is available, the bar is drawn with whiskers spanning the 95% credible interval; read them as "the true rate is probably between these bounds." A bar without whiskers is a single point estimate.
+  </p>
+  <p style="margin: 0 0 0.7rem;">
+    <strong>What Lucid actually reads:</strong> Modules A, B, C, D, E, and F analyse the <em>full</em> sampled conversation (not excerpts) and the on-card "Assistant turn"/"User challenge"/"Adjacent turn" blocks are the specific turns each finding flagged. Only Module H works on retrieved excerpts — it chunks the corpus into turn-pairs, embeds them, and retrieves the top-20 chunks semantically similar to each memory claim. Sampling across conversations is stratified by project and recency-weighted (70% recency, 30% uniform), not random.
+  </p>
+  <p style="margin: 0 0 0.8rem;">
+    <strong>Coverage limitation:</strong> Lucid scores only the <em>text</em> content of each turn. Thinking blocks, tool-use blocks, and tool-result blocks are preserved in the SQLite store for provenance but not sent to classifiers. For tool-heavy Claude Code sessions this means behavioural findings describe the framing text around tool calls, not the tool content itself — keep this in mind when a session's volume is mostly tool output.
+  </p>
+  <p style="margin: 0 0 0.8rem;">
+    <strong>What to do with this report:</strong> read the radar first, then the three-step <em>What to do about this run</em> section, then the conversations-to-review list. Skip to a module section if you want to drill into a specific framework. Every finding carries the conversation id and finding id so you can cross-reference the SQLite store the audit produced.
+  </p>
+  <div class="sn-key" aria-label="Severity key">
+    <span class="swatch" style="background: var(--severity-high);"></span>
+    <span><strong>High</strong> — intensity 3 or unsupported / contradicted memory claim</span>
+    <span class="swatch" style="background: var(--severity-mid);"></span>
+    <span><strong>Mid</strong> — intensity 2 or weakly supported memory claim</span>
+    <span class="swatch" style="background: var(--severity-low);"></span>
+    <span><strong>Low</strong> — intensity 1 (notable but mild)</span>
+    <span class="swatch" style="background: var(--neutral);"></span>
+    <span><strong>Neutral</strong> — well supported, on-corpus, healthy belief drift, or attribution metadata</span>
+  </div>
+</aside>
+
+{# ───── At-a-glance — module bar chart + legend ───── #}
+<section class="glance" aria-labelledby="glance-h">
+  <p class="eyebrow" id="glance-h">Findings at a glance</p>
+  <div class="glance-grid">
+    <div>
+      <figure class="inline">
+        {{ sections | svg_module_bars | safe }}
+        <figcaption>
+          <span class="fig-num">Fig.&nbsp;4</span>&nbsp;&middot;
+          <em>Findings per behaviour module.</em>
+          Module G (deterministic time/model attribution) is excluded — it
+          produces one finding per conversation by construction and would
+          dominate the scale.
+        </figcaption>
+      </figure>
+    </div>
+    <div class="glance-legend">
+      <dl>
+        {% for section in sections %}
+          {% if section.module.value != 'G' %}
+          <dt>{{ section.module.value }}</dt>
+          <dd>
+            <strong>{{ section.count }}</strong>
+            {% if section.count == 0 and section.status == 'empty' %}
+              <span class="muted">— ran clean</span>
+            {% elif section.status == 'incomplete' %}
+              <span class="muted">— incomplete</span>
+            {% endif %}
+          </dd>
+          {% endif %}
+        {% endfor %}
+      </dl>
+    </div>
+  </div>
+
+  {# Confidence histogram — all findings stacked by severity, binned by
+     confidence. Surfaces whether concern-heavy findings are also
+     high-confidence, or whether the audit is mostly tentative. #}
+  {% if aggregate.confidence_histogram_svg %}
+  <div class="conf-hist">
+    <h3 class="conf-hist-title">Confidence distribution, stacked by severity</h3>
+    <figure class="inline">
+      {{ aggregate.confidence_histogram_svg | safe }}
+      <figcaption>
+        <span class="fig-num">Fig.&nbsp;4b</span>&nbsp;&middot;
+        <em>Count of findings per confidence bucket.</em>
+        Bars stack by severity (red high, amber mid, blue low, grey
+        neutral). If most mass sits on the right (0.7+), the audit is
+        high-confidence overall; a flat left-heavy shape suggests
+        many tentative calls.
+      </figcaption>
+    </figure>
+  </div>
+  {% endif %}
+</section>
+
+{# ───── Headlines — cross-module top picks ───── #}
+{% if aggregate.headlines %}
+<section aria-labelledby="head-h">
+  <p class="eyebrow" id="head-h">What surprised us</p>
+  <h2 class="serif">Top moments from this audit</h2>
+  <p class="muted">
+    Numbered by severity then confidence, drawn from every behaviour
+    module. Each entry shows what was detected, why it matters, and
+    the line of conversation that triggered it.
+  </p>
+
+  {# Lede: the #1 headline gets a magazine-style pull treatment so the
+     reader instantly anchors on the most-impactful finding. The
+     remaining headlines render in the numbered list below. #}
+  {% set lede = aggregate.headlines[0] %}
+  <article class="lede" aria-label="Lead finding">
+    <p class="lede-eyebrow">Lead finding · Module {{ lede.module_short }} · {{ lede.severity_class }} severity</p>
+    <h3 class="lede-title">{{ lede.plain_english }}</h3>
+    <div class="lede-meta">
+      <span><span class="sev-dot sev-{{ lede.severity_class }}"></span>{{ lede.severity_class }}</span>
+      <span>· <code>{{ lede.behavior }}</code></span>
+      {% if lede.intensity is not none %}
+        <span>· intensity {{ lede.intensity }} / 3</span>
+      {% endif %}
+      <span>· conf {{ lede.confidence | conf }}</span>
+    </div>
+
+    {# Pick the most representative evidence quote (assistant turn or
+       claim subject) for the pull treatment; falls back to the first
+       block if no quote-like role is present. #}
+    {% set q_block = none %}
+    {% for b in lede.evidence_blocks %}
+      {% if q_block is none and b.role in ('assistant', 'claim', 'user', 'evidence') %}
+        {% set q_block = b %}
+      {% endif %}
+    {% endfor %}
+    {% if q_block is none and lede.evidence_blocks %}
+      {% set q_block = lede.evidence_blocks[0] %}
     {% endif %}
-  </h2>
-  <p class="muted">{{ section.description }}</p>
+    {% if q_block %}
+      <blockquote class="lede-quote">{{ q_block.text }}<span class="lede-quote-attr">— {{ q_block.label }}</span></blockquote>
+    {% elif lede.no_evidence_reason %}
+      <p class="lede-explanation"><em>{{ lede.no_evidence_reason }}</em></p>
+    {% endif %}
+
+    <div class="interp">
+      <div class="interp-row">
+        <span class="interp-label">Why it matters</span>
+        <p class="interp-text">{{ lede.interpretation.why_it_matters }}</p>
+      </div>
+      <div class="interp-row">
+        <span class="interp-label">What to consider</span>
+        <p class="interp-text">{{ lede.interpretation.what_to_consider }}</p>
+      </div>
+    </div>
+
+    <dl class="provenance">
+      {% if lede.module_short == 'H' %}
+        <dt>Source</dt>
+        <dd><code>memories.json</code> &middot; conv <code>{{ lede.conversation_id or "—" }}</code></dd>
+      {% else %}
+        <dt>Conversation</dt>
+        <dd><code>{{ lede.conversation_id or "—" }}</code></dd>
+      {% endif %}
+      <dt>Detected</dt>
+      <dd>{{ lede.detected_at_pretty }} &middot;
+        via
+        {% set url = lede.citation | citation_url %}
+        {% if url %}<a href="{{ url }}" rel="noopener noreferrer">{{ lede.citation_short }}</a>
+        {% else %}{{ lede.citation_short }}{% endif %}
+      </dd>
+    </dl>
+  </article>
+
+  {# Counter starts at 1 so the first counter-increment lands on 02
+     (matches the lede which is labelled "№ 01"). #}
+  <ol class="headline-list" start="2" style="counter-reset: headline 1;">
+    {% for h in aggregate.headlines[1:] %}
+    <li class="headline">
+      <div class="headline-num"></div>
+      <div>
+        <h3 class="headline-title">{{ h.plain_english }}</h3>
+        <div class="headline-meta">
+          <span><span class="sev-dot sev-{{ h.severity_class }}"></span>{{ h.severity_class }}</span>
+          <span>Module {{ h.module_short }}</span>
+          <span>· <code>{{ h.behavior }}</code></span>
+          {% if h.intensity is not none %}
+            <span>· intensity {{ h.intensity }} / 3</span>
+          {% endif %}
+          <span>· conf {{ h.confidence | conf }}</span>
+        </div>
+
+        {# Evidence blocks: module-aware, semantically labelled.
+           Module H produces (claim → reasoning → corpus excerpts);
+           other modules produce (assistant turn → user prompt → context). #}
+        {% for b in h.evidence_blocks %}
+          <div class="evidence evidence-{{ b.role }}">
+            <div class="evidence-label">{{ b.label }}</div>
+            {% if b.meta %}<div class="evidence-meta">{{ b.meta }}</div>{% endif %}
+            <blockquote class="evidence-text">{{ b.text }}</blockquote>
+          </div>
+        {% endfor %}
+
+        {% if h.no_evidence_reason %}
+          <div class="evidence evidence-empty">
+            <div class="evidence-label">No matching evidence</div>
+            <p class="evidence-empty-text">{{ h.no_evidence_reason }}</p>
+          </div>
+        {% endif %}
+
+        <div class="interp">
+          <div class="interp-row">
+            <span class="interp-label">Why it matters</span>
+            <p class="interp-text">{{ h.interpretation.why_it_matters }}</p>
+          </div>
+          <div class="interp-row">
+            <span class="interp-label">What to consider</span>
+            <p class="interp-text">{{ h.interpretation.what_to_consider }}</p>
+          </div>
+        </div>
+
+        {# Provenance footer — always present, with full conversation
+           id (not truncated) and a "verify" framing so the reader
+           knows the source is auditable. #}
+        <dl class="provenance">
+          {% if h.module_short == 'H' %}
+            <dt>Source</dt>
+            <dd><code>memories.json</code> &middot; conv <code>{{ h.conversation_id or "—" }}</code></dd>
+          {% else %}
+            <dt>Conversation</dt>
+            <dd><code>{{ h.conversation_id or "—" }}</code></dd>
+          {% endif %}
+          <dt>Detected</dt>
+          <dd>{{ h.detected_at_pretty }} &middot;
+            via
+            {% set h_url = h.citation | citation_url %}
+            {% if h_url %}<a href="{{ h_url }}" rel="noopener noreferrer">{{ h.citation_short }}</a>
+            {% else %}{{ h.citation_short }}{% endif %}
+          </dd>
+        </dl>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}
+
+{# ───── Time / model attribution — donut + month histogram ───── #}
+<section aria-labelledby="attr-h">
+  <p class="eyebrow" id="attr-h">Time & model attribution</p>
+  <h2 class="serif">Which Claude, when</h2>
+  <p class="muted">
+    Module G assigns each conversation a model id (declared on Claude Code,
+    inferred against the release timeline on Claude.ai) and a
+    year-month bucket. The histogram below is sample volume — the donut
+    is the model split.
+  </p>
+  <div class="attribution">
+    <div>
+      <h3>Conversations per month</h3>
+      {% if time_buckets %}
+        <figure class="inline">
+          {{ time_buckets | svg_month_histogram | safe }}
+          <figcaption>
+            <span class="fig-num">Fig.&nbsp;5</span>&nbsp;&middot;
+            <em>Sample volume by year-month.</em>
+            Bucket boundaries are calendar months; the bar height is the
+            count of sampled conversations whose <code>updated_at</code>
+            timestamp falls in that bucket.
+          </figcaption>
+        </figure>
+      {% else %}
+        <p class="empty-line">No time-attribution buckets in this sample.</p>
+      {% endif %}
+    </div>
+    <div class="attribution-models">
+      <h3>Model split</h3>
+      {% if model_buckets %}
+        <figure class="inline">
+          {{ model_buckets | svg_model_donut | safe }}
+          <ul class="model-legend">
+            {% set palette = ["#2a3a5a", "#5a6a86", "#8b8678", "#cdc6b8", "#dcd4c4"] %}
+            {% for bucket in model_buckets[:5] %}
+            <li>
+              <span class="swatch" style="background: {{ palette[loop.index0 % palette|length] }};"></span>
+              <code>{{ bucket.key }}</code>
+              <span>{{ bucket.count }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          <figcaption style="text-align: left;">
+            <span class="fig-num">Fig.&nbsp;6</span>&nbsp;&middot;
+            <em>Model split.</em>
+            Inferred against the Claude release timeline using
+            <code>updated_at</code> on Claude.ai conversations; declared
+            from session metadata on Claude Code sessions.
+          </figcaption>
+        </figure>
+      {% else %}
+        <p class="empty-line">No model-attribution findings.</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+{# ───── Sections nav ───── #}
+<section aria-labelledby="sections-h">
+  <p class="eyebrow" id="sections-h">Sections</p>
+  <h2 class="serif">By module</h2>
+  <ul class="toc">
+    {% for section in sections %}
+    <li>
+      <a href="#mod-{{ section.module.value }}">
+        Module {{ section.module.value }} —
+        {{ section.name.split("—", 1)[1].strip() if "—" in section.name else section.name }}
+      </a>
+      <span class="count">({{ section.count }})</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+{# ───── Per-module sections ───── #}
+{% for section in sections %}
+<section class="module" id="mod-{{ section.module.value }}">
+  <div class="module-head">
+    <span class="module-letter">{{ section.module.value }}</span>
+    <h2 class="serif">{{ section.name.split("—", 1)[1].strip() if "—" in section.name else section.name }}</h2>
+    {% if section.status == 'ran' %}
+      <span class="module-status ms-ran">{{ section.count }} finding{% if section.count != 1 %}s{% endif %}</span>
+    {% elif section.status == 'incomplete' %}
+      <span class="module-status ms-incomplete">incomplete</span>
+    {% else %}
+      <span class="module-status ms-empty">no findings</span>
+    {% endif %}
+  </div>
+  <p class="module-description">{{ section.description }}</p>
+
+  {# "About this module" explainer — replaces the old single-line blurb
+     with a four-part reader guide: hook, what it measures, why it
+     matters, how to read the findings. Shown on every module section
+     so readers don't need to bounce to external docs. #}
+  <aside class="module-about" aria-label="About module {{ section.module.value }}">
+    <p class="mod-hook"><strong>{{ section.explainer.hook | safe }}</strong></p>
+    <dl class="mod-explainer">
+      <dt>What it measures</dt>
+      <dd>{{ section.explainer.what_it_measures | safe }}</dd>
+      <dt>Why it matters</dt>
+      <dd>{{ section.explainer.why_it_matters | safe }}</dd>
+      <dt>How to read findings</dt>
+      <dd>{{ section.explainer.how_to_read | safe }}</dd>
+    </dl>
+  </aside>
+
+  {# Module A gets the secondary behaviour radar inset: one spoke per
+     Spiral-Bench problem-side behaviour. Gives depth for readers who
+     are already scoped to the framework. #}
+  {% if section.module.value == 'A' and aggregate.behaviour_radar.axes and section.count > 0 %}
+  <div class="behaviour-radar">
+    <h4>Concern by Spiral-Bench behaviour</h4>
+    <figure>
+      {{ aggregate.behaviour_radar | svg_radar | safe }}
+    </figure>
+  </div>
+  {% endif %}
+
+  {# Module H gets a source-aware verdict strip. Split between
+     user-level memories (conversations_memory) and project-scoped
+     memories (project_memories.<uuid>). Project memories for projects
+     not represented in the audit sample are classed as out-of-scope
+     rather than spuriously contradicted. #}
+  {% if section.module.value == 'H' and aggregate.module_h_summary %}
+    {% set h_sum = aggregate.module_h_summary %}
+    {% set verdict_order = ['well-supported', 'weakly-supported', 'insufficient-data', 'unsupported', 'contradicted', 'out-of-scope'] %}
+    <div class="h-summary">
+      <p class="h-source-intro muted">
+        Memory claims are split by <em>source</em>. User-level memories
+        (``conversations_memory``) are verified against the full audited
+        corpus. Project-scoped memories (``project_memories.&lt;uuid&gt;``)
+        are only verified when the audit sample contains conversations
+        from that project; otherwise they're marked
+        <strong>out-of-scope</strong> — the claim isn't wrong, it just
+        can't be verified here. See the methodology note at the top of
+        the report.
+      </p>
+      {% if h_sum.user_total > 0 %}
+      <div class="h-verdict-strip">
+        <div class="h-verdict-head">
+          <span class="h-verdict-label">User-level memory ({{ h_sum.user_total }} claim{% if h_sum.user_total != 1 %}s{% endif %})</span>
+          <span class="h-verdict-meta">retrieved corpus-wide</span>
+        </div>
+        <div class="h-verdict-bar">
+          {% for v in verdict_order %}
+            {% set c = h_sum.user_verdict_counts.get(v, 0) %}
+            {% if c > 0 %}
+              {% set pct = (c / h_sum.user_total) * 100 %}
+              <span class="h-vseg h-v-{{ v }}" style="flex-basis: {{ '%.1f'|format(pct) }}%;"
+                    title="{{ v }}: {{ c }} ({{ '%.0f'|format(pct) }}%)">
+                {% if pct >= 8 %}{{ c }}{% endif %}
+              </span>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <div class="h-verdict-legend">
+          {% for v in verdict_order %}
+            {% set c = h_sum.user_verdict_counts.get(v, 0) %}
+            {% if c > 0 %}
+              <span class="h-vlg"><span class="h-vlg-sw h-v-{{ v }}"></span>{{ v }} ({{ c }})</span>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      {% if h_sum.project_total > 0 %}
+      <div class="h-verdict-strip">
+        <div class="h-verdict-head">
+          <span class="h-verdict-label">Project-scoped memory ({{ h_sum.project_total }} claim{% if h_sum.project_total != 1 %}s{% endif %})</span>
+          <span class="h-verdict-meta">
+            {{ h_sum.project_in_scope }} in-scope · {{ h_sum.project_out_of_scope }} out-of-scope
+          </span>
+        </div>
+        <div class="h-verdict-bar">
+          {% for v in verdict_order %}
+            {% set c = h_sum.project_verdict_counts.get(v, 0) %}
+            {% if c > 0 %}
+              {% set pct = (c / h_sum.project_total) * 100 %}
+              <span class="h-vseg h-v-{{ v }}" style="flex-basis: {{ '%.1f'|format(pct) }}%;"
+                    title="{{ v }}: {{ c }} ({{ '%.0f'|format(pct) }}%)">
+                {% if pct >= 8 %}{{ c }}{% endif %}
+              </span>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <div class="h-verdict-legend">
+          {% for v in verdict_order %}
+            {% set c = h_sum.project_verdict_counts.get(v, 0) %}
+            {% if c > 0 %}
+              <span class="h-vlg"><span class="h-vlg-sw h-v-{{ v }}"></span>{{ v }} ({{ c }})</span>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      {% if h_sum.category_counts %}
+      <div class="h-categories">
+        <span class="h-cat-label">By claim category</span>
+        <ul class="h-cat-list">
+          {% for cat, c in h_sum.category_counts.items() %}
+            <li><strong>{{ cat }}</strong> <span class="muted">· {{ c }}</span></li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      {% if h_sum.contradicted_claims %}
+      <div class="h-contradicted">
+        <span class="h-cat-label">Contradicted claims to review first</span>
+        <ol class="h-contradicted-list">
+          {% for claim in h_sum.contradicted_claims %}
+            <li>{{ claim }}</li>
+          {% endfor %}
+        </ol>
+      </div>
+      {% endif %}
+    </div>
+  {% endif %}
 
   {% if section.status == 'incomplete' %}
-  <p class="empty-state">
-    Module did not run to completion in this audit. No findings are included below.
-    Resuming via <code>lucid audit --resume {{ audit.id }}</code> will pick up where this run left off.
+  <p class="empty-line">
+    Module did not run to completion. Resume via
+    <code>lucid audit --resume {{ audit.id }}</code> to pick up where this run left off.
   </p>
   {% elif section.count == 0 %}
-  <p class="empty-state">
-    Module ran but produced no findings in the sampled corpus. For a behavior-scoring
-    module this is itself an informative outcome — no instances of the 17/9/&hellip;
-    target behaviors were detected on the turns examined.
-  </p>
+  <p class="empty-line">Module ran cleanly. No instances of its target behaviours surfaced in the sampled corpus.</p>
   {% else %}
 
-  <h4>Per-behavior summary</h4>
-  <table>
-    <thead>
-      <tr>
-        <th>Behavior</th>
-        <th class="num">Count</th>
-        <th class="num">Mean intensity</th>
-        <th class="num">Mean confidence</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in section.summary_rows %}
-      <tr>
-        <td><code>{{ row.behavior }}</code></td>
-        <td class="num">{{ row.count }}</td>
-        <td class="num">
-          {% if row.mean_intensity is not none %}{{ "%.2f"|format(row.mean_intensity) }}{% else %}—{% endif %}
-        </td>
-        <td class="num">{{ row.mean_confidence | conf }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+    {# Per-behaviour summary — visual count bars instead of bare digits. #}
+    {% set max_summary_count = section.summary_rows | map(attribute="count") | max %}
+    <h3>Per-behaviour summary</h3>
+    <table class="behaviour">
+      <thead>
+        <tr>
+          <th>Behaviour</th>
+          <th>Plain English</th>
+          <th class="num">Count</th>
+          <th>Distribution</th>
+          <th class="num">Mean intensity</th>
+          <th class="num">Mean confidence</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in section.summary_rows %}
+          {% set sev = row | namespace_sev(section.module) if false else "neutral" %}
+          {# Severity class derived from intensity for behaviour modules; H uses behaviour. #}
+          {% if section.module.value == 'H' %}
+            {% if row.behavior in ['contradicted', 'unsupported'] %}{% set sev = 'high' %}
+            {% elif row.behavior == 'weakly-supported' %}{% set sev = 'mid' %}
+            {% else %}{% set sev = 'neutral' %}{% endif %}
+          {% elif row.mean_intensity is not none and row.mean_intensity >= 2.5 %}{% set sev = 'high' %}
+          {% elif row.mean_intensity is not none and row.mean_intensity >= 1.5 %}{% set sev = 'mid' %}
+          {% elif row.mean_intensity is not none %}{% set sev = 'low' %}
+          {% else %}{% set sev = 'neutral' %}{% endif %}
+          {% set width_pct = (row.count / max_summary_count) * 100 if max_summary_count > 0 else 0 %}
+        <tr>
+          <td><code>{{ row.behavior }}</code></td>
+          <td class="plain-en">{{ row.behavior | plain_english }}</td>
+          <td class="num">{{ row.count }}</td>
+          <td>
+            <div class="behaviour-bar sev-{{ sev }}">
+              <span style="width: {{ "%.1f"|format(width_pct) }}%;"></span>
+            </div>
+          </td>
+          <td class="num">
+            {% if row.mean_intensity is not none %}{{ "%.1f"|format(row.mean_intensity) }}{% else %}—{% endif %}
+          </td>
+          <td class="num">{{ row.mean_confidence | conf }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
 
-  <h4>Top findings</h4>
-  {% for detail in section.top_details %}
-  <details>
-    <summary>
-      <code>{{ detail.behavior }}</code>
-      {% if detail.intensity %}
-        <span class="intensity-cell intensity-{{ detail.intensity }}">{{ detail.intensity }}</span>
-      {% endif %}
-      &middot; conf {{ detail.confidence | conf }}
-      {% if detail.conversation_id %}&middot; conv <code>{{ detail.conversation_id }}</code>{% endif %}
-    </summary>
-    <div style="margin-top: 0.5rem;">
-      <p class="explanation">{{ detail.explanation }}</p>
-      <div>
-        {# SVG whiskers are safe-by-construction: _svg_whisker never embeds user content. #}
-        {% if detail.confidence_ci %}
-          {{ detail.confidence_ci | svg_whisker | safe }}
-          <span class="muted">
-            95% CI [{{ detail.confidence_ci.lower | conf }}, {{ detail.confidence_ci.upper | conf }}]
+    {# Top findings — editorial cards. Null-result behaviours (e.g.
+       answer-not_sycophancy, unknown, out-of-scope) are filtered from
+       top_details in the generator; the summary table above still
+       surfaces the count. When there's nothing concern-direction to
+       show, fall back to a plain note. #}
+    {% if section.top_details %}
+    <h3>Top findings</h3>
+    <ul class="find-list">
+      {% for detail in section.top_details %}
+      <li class="find">
+        <div class="find-head">
+          <code class="find-behaviour">{{ detail.behavior }}</code>
+          {% if detail.intensity %}{{ detail.intensity | svg_intensity_dots | safe }}{% endif %}
+          <span class="conf-pair">
+            {% if detail.confidence_ci %}
+              {{ detail.confidence_ci | svg_whisker | safe }}
+              {{ detail.confidence | conf }}
+              <span class="muted">[{{ detail.confidence_ci.lower | conf }}, {{ detail.confidence_ci.upper | conf }}]</span>
+            {% else %}
+              {{ detail.confidence | conf_bar | safe }}
+              {{ detail.confidence | conf }}
+            {% endif %}
           </span>
-        {% else %}
-          {{ detail.confidence | conf_bar | safe }}
+        </div>
+        <p class="find-plain">{{ detail.behavior | plain_english }}</p>
+        <p class="find-explanation">{{ detail.explanation }}</p>
+        <div class="interp">
+          <div class="interp-row">
+            <span class="interp-label">Why it matters</span>
+            <p class="interp-text">{{ detail.interpretation.why_it_matters }}</p>
+          </div>
+          <div class="interp-row">
+            <span class="interp-label">What to consider</span>
+            <p class="interp-text">{{ detail.interpretation.what_to_consider }}</p>
+          </div>
+        </div>
+
+        {# Module-semantically-correct evidence stack (claim → reasoning
+           → excerpts for Module H; assistant turn → user prompt → context
+           for the rest). The label is canonical for each role; readers
+           never have to guess whether "User" means the audited user or
+           a synthesised memory entry. #}
+        {% for b in detail.evidence_blocks %}
+          <div class="evidence evidence-{{ b.role }}">
+            <div class="evidence-label">{{ b.label }}</div>
+            {% if b.meta %}<div class="evidence-meta">{{ b.meta }}</div>{% endif %}
+            <blockquote class="evidence-text">{{ b.text }}</blockquote>
+          </div>
+        {% endfor %}
+
+        {% if detail.no_evidence_reason %}
+          <div class="evidence evidence-empty">
+            <div class="evidence-label">No matching evidence</div>
+            <p class="evidence-empty-text">{{ detail.no_evidence_reason }}</p>
+          </div>
         {% endif %}
-      </div>
-      {% if detail.quote_user %}
-        <p class="quote-label">User quote</p>
-        <blockquote>{{ detail.quote_user }}</blockquote>
-      {% endif %}
-      {% if detail.quote_assistant %}
-        <p class="quote-label">Assistant quote</p>
-        <blockquote>{{ detail.quote_assistant }}</blockquote>
-      {% endif %}
-      {% if detail.evidence_quotes %}
-        <p class="quote-label">Evidence</p>
-        <ul class="evidence-list">
-          {% for q in detail.evidence_quotes %}<li><blockquote>{{ q }}</blockquote></li>{% endfor %}
-        </ul>
-      {% endif %}
-      <p class="muted">
-        <code>{{ detail.citation }}</code>
-        &middot; detected {{ detail.detected_at.isoformat() }}
-        &middot; finding id <code>{{ detail.id[:12] }}&hellip;</code>
-      </p>
-    </div>
-  </details>
-  {% endfor %}
+
+        <dl class="provenance">
+          {% if detail.module.value == 'H' %}
+            <dt>Source</dt>
+            <dd><code>memories.json</code> &middot; conv <code>{{ detail.conversation_id or "—" }}</code></dd>
+          {% elif detail.conversation_id %}
+            <dt>Conversation</dt>
+            <dd><code>{{ detail.conversation_id }}</code></dd>
+          {% endif %}
+          <dt>Detected</dt>
+          <dd>{{ detail.detected_at_pretty }} &middot;
+            via
+            {% set d_url = detail.citation | citation_url %}
+            {% if d_url %}<a href="{{ d_url }}" rel="noopener noreferrer">{{ detail.citation_short }}</a>
+            {% else %}{{ detail.citation_short }}{% endif %}
+          </dd>
+          <dt>Finding id</dt>
+          <dd><code>{{ detail.id }}</code></dd>
+        </dl>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty-line">Module ran on {{ section.count }}{% if section.count == 1 %} finding{% else %} findings{% endif %}. No concern-direction behaviours surfaced — see the per-behaviour summary above for what the classifier actually found.</p>
+    {% endif %}
   {% endif %}
 </section>
 {% endfor %}
+
 {% endblock %}
