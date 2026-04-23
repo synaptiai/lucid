@@ -206,7 +206,7 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_turn ON embeddings(turn_id);
 CREATE TABLE IF NOT EXISTS report_sections (
     id                       TEXT PRIMARY KEY,
     audit_run_id             TEXT NOT NULL REFERENCES audit_runs(id) ON DELETE CASCADE,
-    section_id               TEXT NOT NULL CHECK (length(section_id) > 0),
+    section_id               TEXT NOT NULL CHECK (length(section_id) BETWEEN 1 AND 64),
     markdown                 TEXT NOT NULL DEFAULT '',
     cited_finding_ids_json   TEXT NOT NULL DEFAULT '[]',
     cited_turn_ids_json      TEXT NOT NULL DEFAULT '[]',
@@ -214,11 +214,16 @@ CREATE TABLE IF NOT EXISTS report_sections (
     decline_reason           TEXT,
     created_at               TEXT NOT NULL,
     CHECK (
-        (insufficient_evidence = 1 AND length(markdown) = 0)
-        OR (insufficient_evidence = 0 AND length(markdown) > 0)
+        (insufficient_evidence = 1
+         AND length(markdown) = 0
+         AND cited_finding_ids_json = '[]'
+         AND cited_turn_ids_json = '[]'
+         AND decline_reason IS NOT NULL
+         AND length(decline_reason) > 0)
+        OR
+        (insufficient_evidence = 0
+         AND length(markdown) > 0
+         AND decline_reason IS NULL)
     ),
     UNIQUE (audit_run_id, section_id)
 );
-
-CREATE INDEX IF NOT EXISTS idx_report_sections_run
-    ON report_sections(audit_run_id);

@@ -583,3 +583,75 @@ def test_report_sections_unique_key(tmp_path: Path) -> None:
                 ),
             )
             conn.commit()
+
+
+def test_report_sections_check_insufficient_requires_empty_citations(tmp_path):
+    """insufficient_evidence=1 with populated citation JSON must be rejected."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        conn = store.connect()
+        _seed_audit_run(store, run_id="run-inv1")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
+                "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
+                "decline_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                ("rs-bad", "run-inv1", "exec_summary", "",
+                 '["f1"]', "[]", 1, "declined", "2026-04-24T10:00:00+00:00"),
+            )
+            conn.commit()
+
+
+def test_report_sections_check_insufficient_requires_decline_reason(tmp_path):
+    """insufficient_evidence=1 without a decline_reason must be rejected."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        conn = store.connect()
+        _seed_audit_run(store, run_id="run-inv2")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
+                "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
+                "decline_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                ("rs-bad2", "run-inv2", "exec_summary", "",
+                 "[]", "[]", 1, None, "2026-04-24T10:00:00+00:00"),
+            )
+            conn.commit()
+
+
+def test_report_sections_check_populated_rejects_decline_reason(tmp_path):
+    """insufficient_evidence=0 with a non-null decline_reason must be rejected."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        conn = store.connect()
+        _seed_audit_run(store, run_id="run-inv3")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
+                "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
+                "decline_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                ("rs-bad3", "run-inv3", "exec_summary", "populated",
+                 "[]", "[]", 0, "should not be here", "2026-04-24T10:00:00+00:00"),
+            )
+            conn.commit()
+
+
+def test_report_sections_check_section_id_length_cap(tmp_path):
+    """section_id longer than 64 characters must be rejected."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        conn = store.connect()
+        _seed_audit_run(store, run_id="run-inv4")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
+                "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
+                "decline_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                ("rs-bad4", "run-inv4", "x" * 65, "populated",
+                 "[]", "[]", 0, None, "2026-04-24T10:00:00+00:00"),
+            )
+            conn.commit()
