@@ -105,36 +105,47 @@ test (see `tests/test_ingest_contract.py` for the pattern).
 
 ## What's stored on disk
 
-Every audit creates:
+Every audit writes to:
 
-1. **SQLite database** at `~/.lucid/audit-<run-id>.sqlite3` (or a
-   custom path via `LUCID_DB_PATH`). Contains: conversations, turns,
+1. **SQLite database** at `.lucid/lucid.sqlite3` under your current
+   working directory. One shared DB across runs — each run's findings
+   are scoped by `audit_run_id` so older runs remain readable and
+   re-renderable after new ones. Contains: conversations, turns,
    findings, memory claims, and (Module H only) embedding vectors.
-   The embeddings are keyed on `sha256(chunk_text)` — you can delete
-   them individually if you want to re-embed.
+   Embeddings are keyed on `sha256(chunk_text)` — if you want to
+   re-embed, you can delete them individually.
 
 2. **HTML report** at `report/<run-id>.html`. Static file, no
-   scripts, no external resources. Open directly in a browser.
+   scripts, no external resources. A companion hackathon deck is
+   written alongside at `report/lucid-deck.html` (keyboard nav
+   only — same CSP, same no-network guarantee). Open directly in a
+   browser.
 
-3. **Logs** (if you passed `--log-level DEBUG` or set
-   `LUCID_LOG_FILE`). Default is stderr only; no log file is
-   written unless you ask for one.
+3. **Logs** (if you passed `--log-level DEBUG`). Default is stderr
+   only; no log file is written unless you redirect stderr yourself.
 
-Everything Lucid creates lives under your home directory or the
-project working directory. Nothing is written to `/tmp` or system
-caches.
+Everything Lucid creates lives under the project working directory.
+Nothing is written to `~`, `/tmp`, or system caches.
 
 ### Deleting a Lucid audit
 
 ```bash
-rm -f ~/.lucid/audit-<run-id>.sqlite3
+# Drop a single run from the shared DB (keeps other audits intact).
+uv run python -c "
+import sqlite3; c = sqlite3.connect('.lucid/lucid.sqlite3')
+c.executescript('DELETE FROM findings WHERE audit_run_id=\"<run-id>\";'
+                'DELETE FROM audit_runs WHERE id=\"<run-id>\";')
+c.commit()
+"
+
+# And the rendered HTML:
 rm -f report/<run-id>.html
 ```
 
-To clean up every Lucid audit at once:
+To wipe every Lucid audit at once:
 
 ```bash
-rm -rf ~/.lucid/
+rm -rf .lucid/
 rm -rf report/
 ```
 

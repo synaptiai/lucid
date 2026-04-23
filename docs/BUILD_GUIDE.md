@@ -3,6 +3,18 @@
 Working doc for building Lucid with Claude Code over April 21-26.
 Intended to seed the `CLAUDE.md` file in the repo once initialized.
 
+> **Status note (2026-04-23, hackathon day 3 of 6).** This guide is the
+> hackathon-build plan of record. As modules ship and schemas evolve,
+> prefer for authoritative shapes and operational facts: `lucid/schemas.py`
+> (data models), `CLAUDE.md` (operational conventions),
+> `docs/methodology.md` (verified external facts), and this guide last
+> (design intent + Day-1 research record). The sections most likely to
+> have drifted are §2 (Data Schemas) and §4 (module prompts) as prompts
+> have bumped versions and schemas have picked up audit-trail fields
+> (`audit_run_id`, `turn_ids_hash`, `prompt_version`, `prompt_hash`,
+> confidence Beta posteriors) plus a new `MemorySupport.OUT_OF_SCOPE`
+> verdict.
+
 *Changelog v2: Schema confirmed against real 90-day Claude.ai export. memories.json added. Module H prompt template added. Sampling strategy added. Day 1 checklist updated with corpus realities.*
 
 ---
@@ -196,6 +208,13 @@ class MemorySupport(str, Enum):
     UNSUPPORTED = "unsupported"
     CONTRADICTED = "contradicted"
     INSUFFICIENT_DATA = "insufficient-data"
+    # Added 2026-04-23 during the hackathon's second half: emitted when
+    # a memory claim is scoped to a project whose conversations are not
+    # present in the audit sample. Not a verdict on the claim's truth —
+    # a statement that this audit can't actually evaluate it. See
+    # module_h_memory.py's source-aware retrieval for the routing logic
+    # that emits this verdict.
+    OUT_OF_SCOPE = "out-of-scope"
 
 
 class Finding(BaseModel):

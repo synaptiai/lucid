@@ -161,7 +161,7 @@ Prompts are markdown files in `prompts/<module>/v<N>.md`.
 
 Each file includes:
 - A YAML frontmatter header with `version`, `model`, `thinking_mode`, `effort`, `citation`, `purpose`, `hash` (sha256 of prompt body — used for cache-stability audit). For Opus 4.7 prompts, `thinking_mode ∈ {disabled, adaptive}` and `effort ∈ {low, medium, high, xhigh, max}` — do NOT set `temperature` (rejected by Opus 4.7). For Sonnet 4.6 or legacy models, `temperature` replaces `effort`.
-- For Opus-backed prompts, pad the system prompt to ≥ 4096 tokens (Opus 4.7 cache minimum); for Sonnet-backed, ≥ 2048 tokens. Below the threshold, prompt caching silently fails (no error; verify via `cache_creation_input_tokens > 0` or `cache_read_input_tokens > 0`).
+- For Opus-backed prompts, pad the system prompt to ≥ 4096 tokens (Opus 4.7 cache minimum); for Sonnet-backed, ≥ 2048 tokens. Below the threshold, prompt caching silently fails (no error; verify via `cache_creation_input_tokens > 0` or `cache_read_input_tokens > 0`). **Implementation shortcut:** don't edit prompt bodies to hit the threshold (that would force a hash bump on every prompt). Use `PromptFile.padded_body` instead — it appends a deterministic load-time padding block sized per model family. The stored body + SHA stay canonical (so provenance is preserved) while the API request carries enough tokens to activate cache. Every module currently calls `prompt.padded_body` at the system-message boundary.
 - The actual prompt body.
 - An `## Output Schema` section describing expected JSON structure.
 - An `## Changelog` section noting why this version differs from the previous.
@@ -266,7 +266,7 @@ Enforcement is two-layer: Pydantic validates at model construction; `store/schem
 2. **No `project_uuid` field on conversations.** The export is flat. Projects are a separate file (`projects.json`) that's a current-state snapshot, not time-filtered.
 3. **Content blocks are richly typed.** Handle `text`, `thinking`, `tool_use`, `tool_result` explicitly. Thinking blocks include a `signature` field; use its length as a depth proxy if needed (Laurenzo methodology).
 4. **`parent_message_uuid`** enables branch detection. The root value is `"00000000-0000-4000-8000-000000000000"`. Most conversations are single-branch; branching happens via edits or regenerations.
-5. **`memories.json`** is a separate top-level file containing `conversations_memory` (plain text) and `project_memories` (dict keyed by project UUID). This is input for Module H.
+5. **`memories.json`** is a separate top-level file containing `conversations_memory` (plain text) and `project_memories` (dict keyed by project UUID). This is input for Module H. Module H applies **source-aware retrieval**: `conversations_memory` verifies against the whole corpus; each `project_memories.<uuid>` entry verifies only against conversations from that project (fuzzy-matched via project titles since the export drops the `project_uuid` field). Claims scoped to a project that isn't in the audit sample emit the `out-of-scope` verdict (`MemorySupport.OUT_OF_SCOPE`) rather than a spurious `unsupported`/`contradicted`.
 6. **MCP integration metadata** appears on `tool_use` blocks: `is_mcp_app`, `mcp_server_url`, `integration_name`. Preserve these when ingesting; they inform Module G.
 7. **`summary` field on conversations is AI-generated**. Treat as a hint, not ground truth.
 8. **`projects.json` is byte-identical across different time-range exports**. It's not scoped by the export window.
@@ -307,6 +307,50 @@ The orchestrator runs as a Managed Agents session. Key details:
 - **Env loading at CLI import:** `lucid/cli.py` calls `_load_dotenv_files()` at import time so `ANTHROPIC_API_KEY` from `.env.local` is available without a shell `export`. Tests strip the key via `tests/conftest.py::_isolate_api_env` (session-level autouse) to guarantee no live API calls during `pytest`.
 
 If Managed Agents has friction, fall back path is the Claude Agent SDK (`claude_agent_sdk` package, v0.2.111+ for Opus 4.7 support). Same tool loop; less managed infrastructure.
+
+## Report + deck conventions
+
+The audit pipeline writes two artefacts per run, both from
+`lucid.report.generator`:
+
+- `report/<run-id>.html` via `write_report(audit, findings, …)` — the
+  definitive audit artefact. One static file, no external scripts,
+  strict CSP (`default-src 'none'`). Uses `report.html.j2`.
+- `report/lucid-deck.html` via `write_deck(audit, findings, …)` — the
+  12-slide hackathon demo deck rendered through `deck.html.j2`. Shares
+  design tokens with `base.html.j2` so the deck reads as the slide-
+  form companion of the report. Navigation keys: ←/→ slide, `N`
+  presenter notes, `P` print. Both artefacts are written by
+  `lucid/run.py::_persist_report` after every successful audit.
+
+**Radar encoding (don't mistake it for the old polygon).** The
+"Concern footprint" hero chart is a **stacked radial bar** chart,
+not a polygon radar. For each of the 7 behaviour modules:
+
+- Bar length encodes module activity: `√(count / max_count) × r_max`
+  (so H's 140 findings don't crush A's 10 into invisibility).
+- Segments stack from the centre outward as
+  `neutral → low → mid → high`. Severity mapping comes from
+  `_severity_class(module, intensity, behavior)` — protective
+  behaviours (pushback, boundary-setting, benign-warmth, etc.) always
+  land in `neutral`; Module H `contradicted`/`unsupported` → high,
+  `weakly-supported` → mid, `out-of-scope`/`well-supported`/
+  `insufficient-data` → neutral.
+- A long grey bar = module fired often, nothing concerning (healthy).
+  A short red-tipped bar = few findings, serious ones. A centre dot
+  = module ran clean, no findings at all. The three cases must stay
+  visually distinct — if you ever change the encoding, make sure
+  that's preserved.
+
+**Null-result filtering.** `_top_details` + `_headline_findings`
+exclude null labels (`unknown`, `regressive`, `answer-not_sycophancy`)
+and `_PROTECTIVE_BEHAVIORS`. Modules whose only findings were null-
+results render an empty-state paragraph, never an empty `<ul>`.
+
+**Figure numbering.** Sequential across the report: Fig. 1 radar,
+Fig. 2 co-occurrence heatmap, Fig. 3 fingerprint, Fig. 4 module
+bars, Fig. 4b confidence histogram, Fig. 5 month timeline, Fig. 6
+model donut. Don't introduce collisions — tests guard Fig. 4/5/6.
 
 ## Common tasks
 

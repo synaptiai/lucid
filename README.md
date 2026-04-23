@@ -5,21 +5,26 @@
 
 **First-draft interface for auditing your thinking-with-AI.**
 
-Lucid ingests your Claude Code sessions (`~/.claude/projects/`) and Claude.ai conversation export, runs a composition of published AI-safety research frameworks (SpiralBench, Sharma sycophancy, SycEval, Jain perspective sycophancy, BeliefShift, Truth Decay, Influence Tactics Protocol) against the corpus, and produces a structured HTML report surfacing sycophancy events, belief drift, reinforcement spirals, user-side influence tactics, memory-corpus consistency, and time/model attribution.
+Lucid ingests your Claude Code sessions (`~/.claude/projects/`) and Claude.ai conversation export, runs a composition of published AI-safety research frameworks (Spiral-Bench, Sharma sycophancy, SycEval, Jain perspective sycophancy, BeliefShift, Influence Tactics Protocol, MedTrust-RAG) against the corpus, and produces a structured HTML report surfacing sycophancy events, belief drift, reinforcement spirals, user-side influence tactics, memory-corpus consistency, and time/model attribution.
 
 Everything runs locally. API calls go out only to Anthropic (for classification) and Voyage AI (for Module H embeddings).
 
 ## Status
 
-Pre-release. Hackathon build, April 21–26, 2026. Expect rough edges until v0.1.0 tag.
+Alpha. In-progress submission for the Anthropic Opus 4.7 hackathon
+(2026-04-21 → 2026-04-26). Not yet published to PyPI — install from
+source until a v0.1.0 tag lands.
+
+The audit pipeline runs end-to-end: ingest → cost gate → Managed Agents
+orchestrator (with direct-invocation backfill) → modules A/B/C/E/F/H
+plus deterministic G (plus opt-in D via `--include-module-d`) → static
+HTML report + hackathon slide deck. Calibration numbers against
+Spiral-Bench v1.2 live in [`docs/calibration.md`](docs/calibration.md).
 
 ## Install
 
 ```bash
-# From PyPI (once published)
-uvx lucid --help
-
-# Or from source
+# Install from source (only path until a v0.1.0 tag is published)
 git clone https://github.com/synaptiai/lucid.git
 cd lucid
 uv sync --extra dev
@@ -40,8 +45,10 @@ uv run lucid audit --source claude-code --path ~/.claude/projects --sample 20 --
 uv run lucid audit --source claude-code --path ~/.claude/projects --sample 100
 ```
 
-The report lands at `report/<run-id>.html` — a static HTML file with no external
-scripts. Open it in any browser.
+The report lands at `report/<run-id>.html` — a static HTML file with no
+external scripts. A companion hackathon slide deck is written alongside at
+`report/lucid-deck.html` (press `N` in-deck for speaker notes, `P` to print).
+Open either in any browser.
 
 ### See a sample report without running an audit
 
@@ -66,10 +73,11 @@ class. No API calls, no cost.
 | E | Cross-conversation belief drift with evidence-vs-pressure attribution | [BeliefShift arxiv:2603.23848](https://arxiv.org/abs/2603.23848) |
 | F | 9-category user-prompt influence tactics analyzer | [Influence Tactics Protocol](https://github.com/synaptiai/influence-tactics-protocol) |
 | G | Deterministic time/model attribution | Lucid methodology §5 |
-| H | Memory-corpus consistency via retrieval + two-stage verification | [MedTrust-RAG 2025](https://arxiv.org/pdf/2510.14400) |
+| H | Memory-corpus consistency via retrieval + two-stage verification, with source-aware routing (user-level vs. project-scoped memories) and an `out-of-scope` verdict for claims about projects not in the audit sample | [MedTrust-RAG 2025](https://arxiv.org/pdf/2510.14400) |
 
 Each module's prompts and rubric live under `prompts/module_<letter>/`. Every
-finding in the report cites the framework that scored it.
+finding in the report cites the framework that scored it. Module D (Jain
+perspective sycophancy) is opt-in via `--include-module-d` — off by default.
 
 ## What Lucid does and doesn't do
 

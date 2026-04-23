@@ -173,7 +173,7 @@ to resolve under Python 3.13.13 via `uv 0.11.7`.
 - [x] Confirm Anthropic SDK v0.96.0 `messages.parse(output_format=...)` signature against release notes (confirmed during Phase 6A Module A implementation).
 - [x] Confirm `client.beta.agents.create` / `environments.create` / `sessions.create` / `events.stream` method names and shapes against SDK v0.96.0 source (confirmed during Phase 5B live-transport run).
 - [x] Fix `CLAUDE.md` temperature guidance: Opus 4.7 rejects non-default `temperature` — adaptive thinking + effort replaces temperature for determinism-style control. (Done in Phase 0 commit 2026-04-21.)
-- [ ] Update BUILD_GUIDE §5 `ANTHROPIC_DEFAULT_MODEL_TIMELINE` constant with the confirmed dates in §5 above. Interim: Module G uses the §5 timeline directly (see `lucid/modules/module_g_attribution.py`). Folded into Phase 9 BUILD_GUIDE reconciliation.
+- [x] `ANTHROPIC_DEFAULT_MODEL_TIMELINE` reconciled. The authoritative timeline now lives at `lucid/modules/module_g_attribution.py::ANTHROPIC_DEFAULT_MODEL_TIMELINE`, carrying the §5 dates (Sonnet 4.6 2026-02-17 included; Opus 4.7 2026-04-16). BUILD_GUIDE §5 is now annotated as historical — treat `module_g_attribution.py` as source of truth going forward.
 
 ## 10. Phase 6B calibration methodology (synthetic gold + cross-judge IAA + human audit)
 
@@ -259,6 +259,87 @@ Limitations documented explicitly in `docs/calibration.md` alongside the numbers
        # final report with human-audit overrides applied
 ```
 
+## 11. Module H source-aware retrieval (added 2026-04-23)
+
+**Problem.** Module H's original retrieval scheme ran each memory
+claim against the whole audited corpus. Project-scoped memories
+(`project_memories.<uuid>`) were returning `unsupported` or
+`contradicted` at high rates — not because the claims were wrong, but
+because the conversations they were about weren't in the audit
+sample. In `run-95bd99483503` (pre-fix, 6 sampled conversations), 126
+of 130 Module H findings were scoped to `project_memories.<uuid>`
+and 69 of those 130 (53%) landed on the concern side
+(`contradicted=5`, `unsupported=64`) — driven by corpus sparsity
+rather than genuine memory divergence.
+
+**Fix.** Module H now partitions retrieval by source:
+
+- `conversations_memory` (user-level) verifies against the whole
+  corpus, as before.
+- Each `project_memories.<uuid>` entry verifies only against
+  conversations attributable to that project. Attribution is fuzzy-
+  matched via project titles because the Claude.ai export drops the
+  `project_uuid` field from conversation records (see BUILD_GUIDE §3
+  gotchas).
+- A new verdict `MemorySupport.OUT_OF_SCOPE` is emitted for
+  project-scoped claims whose project has zero conversations in the
+  audit sample. The verdict renders as severity-neutral (grey) and
+  reads as "this audit can't actually evaluate this claim" — not a
+  truth verdict on the claim.
+
+**Validation.** On `run-a5b3439f9a62` (post-fix, 150 sampled
+conversations, same pipeline): of 140 Module H findings, 135 route
+to `out-of-scope` (they refer to projects absent from the sample), 3
+`unsupported`, 1 `weakly-supported`, 1 `insufficient-data`, 0
+`contradicted`. Concern-direction rate on Module H: 3/140 ≈ 2%, down
+from 53% in the pre-fix run on the same adapter. The remaining
+concern-direction findings are specific memories that fail to match
+in-scope corpus evidence (e.g. "User regularly pitches to
+investors" where the retrieved excerpts are dominated by charity
+fundraising).
+
+**Calibration status.** The `out-of-scope` branch runs purely from
+the retrieval routing — no LLM classification, no calibration target.
+In-scope verdicts continue to run through the `classify_v*.md`
+prompt and are calibrated against hand-labelled claims as before.
+
+## 12. Prompt-cache padding (added 2026-04-23)
+
+**Problem.** All shipped Lucid system prompts were below the
+prompt-cache minimums in §3 (Opus 4.7: 4096 tokens; Sonnet 4.6: 2048
+tokens). Every module was setting `cache_control={"type":
+"ephemeral"}` on the system block, but the cache was silently no-op-
+ing — visible via `usage.cache_creation_input_tokens == 0` and
+`usage.cache_read_input_tokens == 0` on every call.
+
+**Fix.** `lucid.prompts.PromptFile.padded_body` synthesises a
+deterministic padding block at load time, sized per model family
+(Opus: 4300, Sonnet: 2250, with safety margin above the published
+floor). The stored prompt body + SHA-256 stay canonical (so prompt
+versioning and hash audit trails are unaffected); the API request
+carries enough tokens to activate caching. Every module switched
+from `prompt.body` to `prompt.padded_body`.
+
+**Validation.** Measured cache-read share of per-module input tokens
+on `run-a5b3439f9a62` (150 Claude Code conversations):
+
+| Module | Input tokens | Cache-read tokens | Cache-read share |
+|---|---:|---:|---:|
+| A | 1,151,650 | 978,902 | 85% |
+| B | 1,151,650 | 690,990 | 60% |
+| C | 1,151,650 | 690,990 | 60% |
+| E | 1,151,650 | 633,407 | 55% |
+| F | 1,151,650 | 690,990 | 60% |
+| H | 1,151,650 | 806,155 | 70% |
+
+Cache-read tokens bill at 10% of base input (§2), so input-side
+pricing is reduced by roughly `0.9 × cache_share` — ~76% for Module
+A, ~50-63% for the ad-hoc modules. Actual total-audit savings are
+smaller because output tokens are never cached. Cache-hit shares
+match the per-module predictions in `MODULE_PROFILES` (`lucid/cost.py`)
+to within a few percentage points, which is the acceptance criterion
+for "cache is engaged as designed".
+
 ---
 
-*Seeded 2026-04-21 during Phase 0. Update in-place as modules ship and as new facts are verified. Phase 6B methodology added 2026-04-22.*
+*Seeded 2026-04-21 during Phase 0. Update in-place as modules ship and as new facts are verified. Phase 6B methodology added 2026-04-22. Module H source-aware retrieval + prompt-cache padding added 2026-04-23 (hackathon day 3).*
