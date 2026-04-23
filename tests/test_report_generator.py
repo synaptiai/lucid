@@ -600,9 +600,7 @@ def test_module_h_finding_renders_audited_claim_label_not_user() -> None:
             "metadata": {
                 "claim_category": "work",
                 "memory_source": "conversations_memory",
-                "reasoning": (
-                    "Top similarity 0.45; no excerpts mention investor pitches."
-                ),
+                "reasoning": ("Top similarity 0.45; no excerpts mention investor pitches."),
             }
         }
     )
@@ -808,9 +806,7 @@ def test_evidence_filter_drops_empty_evidence_quotes() -> None:
     # No empty evidence blockquote anywhere — that was the legacy bug.
     assert '<blockquote class="evidence-text"></blockquote>' not in html_text
     # Whitespace-only contents are also a regression.
-    assert not re.search(
-        r'<blockquote class="evidence-text">\s*</blockquote>', html_text
-    )
+    assert not re.search(r'<blockquote class="evidence-text">\s*</blockquote>', html_text)
 
 
 def test_short_citation_keeps_author_year_for_paper_citations() -> None:
@@ -836,7 +832,9 @@ def test_short_citation_keeps_framework_prefix_intact() -> None:
 
     assert _short_citation("Lucid Module H — memory-corpus consistency") == "Lucid Module H"
     assert _short_citation("Lucid Module G: deterministic attribution") == "Lucid Module G"
-    assert _short_citation("Spiral-Bench, https://github.com/sam-paech/spiral-bench") == "Spiral-Bench"
+    assert (
+        _short_citation("Spiral-Bench, https://github.com/sam-paech/spiral-bench") == "Spiral-Bench"
+    )
 
 
 def test_module_h_provenance_labels_source_as_memories_json() -> None:
@@ -1034,12 +1032,24 @@ def test_fingerprint_one_cell_per_unique_conversation() -> None:
     """Two findings on the same conversation collapse into one cell;
     two distinct conversation_ids produce two cells."""
     findings = [
-        _finding(id_="x1", module=ModuleName.A_SPIRALBENCH, behavior="pushback",
-                 conversation_id="conv-aaa"),
-        _finding(id_="x2", module=ModuleName.A_SPIRALBENCH, behavior="sycophancy",
-                 conversation_id="conv-aaa"),
-        _finding(id_="x3", module=ModuleName.B_SHARMA, behavior="feedback-sycophancy",
-                 conversation_id="conv-bbb"),
+        _finding(
+            id_="x1",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="pushback",
+            conversation_id="conv-aaa",
+        ),
+        _finding(
+            id_="x2",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="sycophancy",
+            conversation_id="conv-aaa",
+        ),
+        _finding(
+            id_="x3",
+            module=ModuleName.B_SHARMA,
+            behavior="feedback-sycophancy",
+            conversation_id="conv-bbb",
+        ),
     ]
     cells = _fingerprint_cells(findings)
     assert {c.conversation_id for c in cells} == {"conv-aaa", "conv-bbb"}
@@ -1052,8 +1062,12 @@ def test_fingerprint_excludes_module_g() -> None:
     """Module G fires once per conversation by construction; including
     it would give every cell the same neutral colour."""
     findings = [
-        _finding(id_="g1", module=ModuleName.G_ATTRIBUTION, behavior="model=x",
-                 conversation_id="conv-only-g"),
+        _finding(
+            id_="g1",
+            module=ModuleName.G_ATTRIBUTION,
+            behavior="model=x",
+            conversation_id="conv-only-g",
+        ),
     ]
     cells = _fingerprint_cells(findings)
     assert cells == []
@@ -1061,12 +1075,24 @@ def test_fingerprint_excludes_module_g() -> None:
 
 def test_fingerprint_dominant_module_wins_ties_by_count() -> None:
     findings = [
-        _finding(id_="m1", module=ModuleName.A_SPIRALBENCH, behavior="pushback",
-                 conversation_id="conv-zzz"),
-        _finding(id_="m2", module=ModuleName.A_SPIRALBENCH, behavior="pushback",
-                 conversation_id="conv-zzz"),
-        _finding(id_="m3", module=ModuleName.B_SHARMA, behavior="feedback-sycophancy",
-                 conversation_id="conv-zzz"),
+        _finding(
+            id_="m1",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="pushback",
+            conversation_id="conv-zzz",
+        ),
+        _finding(
+            id_="m2",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="pushback",
+            conversation_id="conv-zzz",
+        ),
+        _finding(
+            id_="m3",
+            module=ModuleName.B_SHARMA,
+            behavior="feedback-sycophancy",
+            conversation_id="conv-zzz",
+        ),
     ]
     cells = _fingerprint_cells(findings)
     assert len(cells) == 1
@@ -1075,10 +1101,20 @@ def test_fingerprint_dominant_module_wins_ties_by_count() -> None:
 
 def test_fingerprint_severity_takes_worst_finding() -> None:
     findings = [
-        _finding(id_="s1", module=ModuleName.A_SPIRALBENCH, behavior="pushback",
-                 intensity=1, conversation_id="conv-mix"),
-        _finding(id_="s2", module=ModuleName.A_SPIRALBENCH, behavior="harmful-escalation",
-                 intensity=3, conversation_id="conv-mix"),
+        _finding(
+            id_="s1",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="pushback",
+            intensity=1,
+            conversation_id="conv-mix",
+        ),
+        _finding(
+            id_="s2",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="harmful-escalation",
+            intensity=3,
+            conversation_id="conv-mix",
+        ),
     ]
     cells = _fingerprint_cells(findings)
     assert len(cells) == 1
@@ -1088,8 +1124,9 @@ def test_fingerprint_severity_takes_worst_finding() -> None:
 def test_fingerprint_skips_findings_without_conversation_id() -> None:
     """Cross-corpus Module H findings can carry conversation_id=None."""
     findings = [
-        _finding(id_="h1", module=ModuleName.H_MEMORY, behavior="unsupported",
-                 conversation_id=None),
+        _finding(
+            id_="h1", module=ModuleName.H_MEMORY, behavior="unsupported", conversation_id=None
+        ),
     ]
     cells = _fingerprint_cells(findings)
     assert cells == []
@@ -1097,14 +1134,34 @@ def test_fingerprint_skips_findings_without_conversation_id() -> None:
 
 def test_fingerprint_cells_sorted_by_severity_then_count() -> None:
     findings = [
-        _finding(id_="a", module=ModuleName.A_SPIRALBENCH, behavior="sycophancy",
-                 intensity=1, conversation_id="conv-low"),
-        _finding(id_="b", module=ModuleName.A_SPIRALBENCH, behavior="harmful-escalation",
-                 intensity=3, conversation_id="conv-high"),
-        _finding(id_="c", module=ModuleName.A_SPIRALBENCH, behavior="harmful-escalation",
-                 intensity=3, conversation_id="conv-high-2"),
-        _finding(id_="d", module=ModuleName.A_SPIRALBENCH, behavior="harmful-escalation",
-                 intensity=3, conversation_id="conv-high-2"),
+        _finding(
+            id_="a",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="sycophancy",
+            intensity=1,
+            conversation_id="conv-low",
+        ),
+        _finding(
+            id_="b",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="harmful-escalation",
+            intensity=3,
+            conversation_id="conv-high",
+        ),
+        _finding(
+            id_="c",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="harmful-escalation",
+            intensity=3,
+            conversation_id="conv-high-2",
+        ),
+        _finding(
+            id_="d",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="harmful-escalation",
+            intensity=3,
+            conversation_id="conv-high-2",
+        ),
     ]
     cells = _fingerprint_cells(findings)
     # conv-high-2 has 2 high-severity findings → ranked first
@@ -1156,10 +1213,20 @@ def test_render_includes_fingerprint_section() -> None:
     """The hero/fingerprint section becomes the screenshot — it must
     render when there are loud cells."""
     findings = [
-        _finding(id_="f1", module=ModuleName.A_SPIRALBENCH, behavior="pushback",
-                 intensity=3, conversation_id="conv-fingerprint-1"),
-        _finding(id_="g1", module=ModuleName.G_ATTRIBUTION, behavior="model=x",
-                 intensity=None, conversation_id="conv-fingerprint-1"),
+        _finding(
+            id_="f1",
+            module=ModuleName.A_SPIRALBENCH,
+            behavior="pushback",
+            intensity=3,
+            conversation_id="conv-fingerprint-1",
+        ),
+        _finding(
+            id_="g1",
+            module=ModuleName.G_ATTRIBUTION,
+            behavior="model=x",
+            intensity=None,
+            conversation_id="conv-fingerprint-1",
+        ),
     ]
     html_out = render_report(_audit_run(), findings)
     assert 'class="fingerprint"' in html_out
@@ -1170,7 +1237,7 @@ def test_render_includes_fingerprint_section() -> None:
 
 def test_render_includes_drop_cap_and_masthead() -> None:
     html_out = render_report(_audit_run(), _sample_findings_with_g_metadata())
-    assert 'hero-masthead' in html_out
+    assert "hero-masthead" in html_out
     assert "Lucid Epistemic Audit" in html_out
     assert "Run №" in html_out
 

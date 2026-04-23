@@ -6,9 +6,10 @@ Public surface:
 - `build_tool_registry(store, cost_estimator, run_id)` — constructs the
   registry with bound handlers for a given audit run.
 - `dispatch_tool_call(registry, name, args)` — run a single tool call.
-- `SYSTEM_PROMPT` — routing prompt for the Sonnet 4.6 orchestrator
-  (padded past the 2048-token Sonnet cache minimum; `cache_control`
-  applied by the caller).
+- `SYSTEM_PROMPT` — routing prompt for the Opus 4.7 orchestrator.
+  Delivered as a plain string to `beta.agents.create`; the Managed
+  Agents runtime handles prompt caching internally, so no explicit
+  `cache_control` / padding applies at this layer.
 """
 
 from lucid.orchestrator.handler import (

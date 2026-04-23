@@ -10,6 +10,19 @@ patterns is passed forward. The downstream stages will filter out false
 positives. A prompt that matches NO pattern is dropped, saving the cost
 of a Sonnet call.
 
+**Stochastic-sample floor (v2).** Three of nine categories
+(context-omission, cherry-picked-data, logical-fallacies) are structural
+and invisible to surface regex — the heuristic comment below flagged
+this. On corpora dominated by technical user prompts (e.g. a Claude Code
+session corpus) every pattern-match can end up in the triage's
+``drop`` column, leaving those three structural categories permanently
+unreachable. :func:`heuristic_match` now samples a deterministic
+fraction of non-matched prompts (default 10% via
+:data:`STOCHASTIC_SAMPLING_RATE`) as candidates with
+``matched_categories=()``; the triage prompt recognises that shape as a
+"look harder" request. Determinism uses blake2b over the prompt text so
+re-runs produce the same sample set, which matters for calibration.
+
 **What this is not.** This is not the ITP classifier. It does not output
 categories or intensities. It outputs a single boolean per prompt (plus
 which patterns matched, for debugging). Do not add categorical logic
@@ -27,6 +40,7 @@ https://github.com/synaptiai/influence-tactics-protocol
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -34,13 +48,27 @@ from dataclasses import dataclass
 __all__ = [
     "HEURISTIC_VERSION",
     "ITP_CATEGORIES",
+    "STOCHASTIC_SAMPLING_RATE",
+    "STOCHASTIC_SNIPPET_MARKER",
     "HeuristicResult",
     "heuristic_match",
     "looks_like_tactic_candidate",
 ]
 
 
-HEURISTIC_VERSION = "heuristic_v1"
+HEURISTIC_VERSION = "heuristic_v2"
+
+# Default fraction of non-matched prompts promoted to the candidate pool
+# to cover the structural categories regex can't see. Tuned for a ~10–15%
+# cost bump on Module F's Stage 2 budget; calibration can lower this once
+# real FP rates are known.
+STOCHASTIC_SAMPLING_RATE = 0.10
+
+# Value used for ``matched_snippets`` when a candidate was promoted via the
+# stochastic floor rather than a regex match. The triage prompt branches
+# on this token so Sonnet knows it is doing a semantic scan, not a match
+# adjudication.
+STOCHASTIC_SNIPPET_MARKER = "__stochastic-sample__"
 
 ITP_CATEGORIES: tuple[str, ...] = (
     "emotional-triggers",
@@ -145,17 +173,42 @@ class HeuristicResult:
     matched_snippets: tuple[str, ...]
 
 
-def heuristic_match(user_prompt: str) -> HeuristicResult:
+def _stochastic_bucket(user_prompt: str) -> float:
+    """Deterministic [0, 1) bucket from the prompt text.
+
+    Uses blake2b so the bucket is stable across interpreter runs (unlike
+    ``hash()`` under PYTHONHASHSEED randomisation). 16 hex digits of
+    entropy is plenty for a 10% sampling decision.
+    """
+    digest = hashlib.blake2b(user_prompt.encode("utf-8"), digest_size=8).hexdigest()
+    return int(digest, 16) / 0xFFFFFFFFFFFFFFFF
+
+
+def heuristic_match(
+    user_prompt: str,
+    *,
+    stochastic_rate: float = STOCHASTIC_SAMPLING_RATE,
+    min_length_for_sampling: int = 80,
+) -> HeuristicResult:
     """Scan ``user_prompt`` for candidate influence-tactic signals.
 
     Returns a :class:`HeuristicResult` whose ``is_candidate`` is ``True``
-    when at least one pattern across any category matches. ``matched_categories``
-    is the sorted list of category ids that fired. ``matched_snippets``
-    holds up to one representative match per category (truncated to 60
-    chars) for debug logging.
+    when at least one pattern across any category matches **or** the
+    prompt is drawn into the stochastic sample (see module docstring).
+    ``matched_categories`` is the sorted list of category ids that fired
+    via regex — it is empty when the candidate comes from the stochastic
+    floor. ``matched_snippets`` holds up to one representative match per
+    category (truncated to 60 chars) for debug logging, or
+    ``(STOCHASTIC_SNIPPET_MARKER,)`` for a stochastic candidate.
 
-    This function does not emit findings. It does not classify. It is the
-    cheapest possible filter for Stage 2's input set.
+    Pass ``stochastic_rate=0.0`` to disable sampling (matches the
+    original heuristic_v1 behaviour for tests that want deterministic
+    zero candidates on benign prompts). ``min_length_for_sampling``
+    excludes very short prompts from the sample — a three-word message
+    rarely carries a structural tactic.
+
+    This function does not emit findings. It does not classify. It is
+    the cheapest possible filter for Stage 2's input set.
     """
     matched: list[str] = []
     snippets: list[str] = []
@@ -169,10 +222,32 @@ def heuristic_match(user_prompt: str) -> HeuristicResult:
                     snippet = snippet[:60] + "…"
                 snippets.append(snippet)
                 break  # one match per category is enough
+
+    if matched:
+        return HeuristicResult(
+            is_candidate=True,
+            matched_categories=tuple(sorted(set(matched))),
+            matched_snippets=tuple(snippets),
+        )
+
+    # No regex match — fall through to the stochastic floor. Short
+    # prompts are skipped; they are unlikely to carry structural tactics
+    # and sampling them burns Sonnet budget on noise.
+    if (
+        stochastic_rate > 0.0
+        and len(user_prompt) >= min_length_for_sampling
+        and _stochastic_bucket(user_prompt) < stochastic_rate
+    ):
+        return HeuristicResult(
+            is_candidate=True,
+            matched_categories=(),
+            matched_snippets=(STOCHASTIC_SNIPPET_MARKER,),
+        )
+
     return HeuristicResult(
-        is_candidate=bool(matched),
-        matched_categories=tuple(sorted(set(matched))),
-        matched_snippets=tuple(snippets),
+        is_candidate=False,
+        matched_categories=(),
+        matched_snippets=(),
     )
 
 

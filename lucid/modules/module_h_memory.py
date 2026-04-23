@@ -399,7 +399,7 @@ _PROJECT_SOURCE_PREFIX = "project_memories."
 def _project_uuid_from_source(memory_source: str) -> str | None:
     """Return the project UUID for a project-scoped memory source, else None."""
     if memory_source.startswith(_PROJECT_SOURCE_PREFIX):
-        return memory_source[len(_PROJECT_SOURCE_PREFIX):]
+        return memory_source[len(_PROJECT_SOURCE_PREFIX) :]
     return None
 
 
@@ -625,8 +625,7 @@ class ModuleHMemory:
             projects = []
         project_attribution = _build_project_attribution(corpus, projects)
         _LOGGER.info(
-            "Module H: project attribution maps %d of %d projects "
-            "to audit-corpus conversations.",
+            "Module H: project attribution maps %d of %d projects to audit-corpus conversations.",
             len(project_attribution),
             len(projects),
         )

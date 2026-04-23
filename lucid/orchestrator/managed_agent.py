@@ -28,11 +28,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from lucid.orchestrator.handler import HeartbeatMonitor, dispatch_tool_call
+from lucid.orchestrator.lifecycle import (
+    get_or_create_orchestrator_agent,
+    prune_stale_orchestrator_agents,
+)
 from lucid.orchestrator.system_prompt import PROMPT_VERSION, SYSTEM_PROMPT
 from lucid.orchestrator.tools import ToolRegistry
 
@@ -71,11 +75,28 @@ class OrchestratorConfig:
     """
 
     run_id: str
-    orchestrator_model: str = "claude-sonnet-4-6"
+    orchestrator_model: str = "claude-opus-4-7"
     session_timeout_seconds: float = 3600.0
     heartbeat_stall_seconds: float = 60.0
     heartbeat_check_interval_seconds: float = 5.0
     system_prompt: str = SYSTEM_PROMPT
+    # When False (default), the per-run environment + session are deleted in
+    # the run()'s finally block so the console doesn't accumulate dead rows.
+    # Set True when debugging a live session — the orchestrator agent itself
+    # is always version-keyed and reused, never deleted here.
+    keep_ephemeral: bool = False
+    # Continuation nudges: inject a `user.message` after each tool_result
+    # so the orchestrator is prompted to continue. DISABLED BY DEFAULT
+    # because the Managed Agents event-state machine rejects `user.message`
+    # while "waiting on user.custom_tool_result" (HTTP 400, verified in
+    # run-9b7031f168cf: 57 of the 57 nudges got 400'd). The mechanism
+    # remains in the code for future experimentation — set True when
+    # testing a different nudge shape (e.g. `user.interrupt` instead of
+    # `user.message`) or timing (await next agent event first). The
+    # imperative-kickoff fix alone moves tool_calls 1→2 on live runs,
+    # and the Phase-12 direct-invocation backfill carries the audit to
+    # completion regardless.
+    continuation_nudges: bool = False
 
 
 @dataclass
@@ -132,21 +153,30 @@ class ManagedAgentsSession:
 
     # ----- lifecycle -----------------------------------------------
 
-    def create_agent(self) -> str:
-        # Managed Agents `beta.agents.create` accepts `system` as a plain
-        # string, not the list-of-blocks + cache_control shape that
-        # `messages.create` uses. Caching for the orchestrator prompt is
-        # handled internally by the agents runtime; we don't set
-        # cache_control here. The prompt body is read from the config so
-        # that callers can substitute (smoke, calibration) without
-        # monkey-patching this method.
-        agent = self.client.beta.agents.create(
-            name=f"lucid-orchestrator-{self.config.run_id[:8]}",
+    def get_or_create_agent(self) -> str:
+        """Find the versioned orchestrator agent or create it if missing.
+
+        Names the agent ``lucid-orchestrator-v<PROMPT_VERSION>`` so one
+        agent serves every run that uses the same prompt — the warm
+        internal cache survives across audits, and the Anthropic console
+        stays legible (one row per active prompt version, not one row
+        per run). A :data:`PROMPT_VERSION` bump naturally lands in a
+        different name, so a fresh agent is created and
+        :func:`prune_stale_orchestrator_agents` in ``run()`` archives
+        the old one on the next pass.
+
+        Managed Agents ``beta.agents.create`` accepts ``system`` as a
+        plain string, not the list-of-blocks + cache_control shape that
+        ``messages.create`` uses. Caching for the orchestrator prompt
+        is handled internally by the agents runtime; we don't set
+        cache_control here.
+        """
+        return get_or_create_orchestrator_agent(
+            self.client,
             model=self.config.orchestrator_model,
-            system=self.config.system_prompt,
+            system_prompt=self.config.system_prompt,
             tools=self.registry.as_agent_tools(),
         )
-        return str(agent.id)
 
     def create_environment(self) -> str:
         environment = self.client.beta.environments.create(
@@ -172,7 +202,15 @@ class ManagedAgentsSession:
 
     async def run(self, kickoff_message: str) -> SessionOutcome:
         """Spin up (agent, env, session), send the kickoff, loop on events."""
-        agent_id = self.create_agent()
+        agent_id = self.get_or_create_agent()
+        # Archive older orchestrator agents (different PROMPT_VERSION) on
+        # every run so the console stays pruned automatically. Failures
+        # are logged inside the helper and don't block the audit.
+        try:
+            prune_stale_orchestrator_agents(self.client)
+        except Exception as err:
+            _LOGGER.warning("Stale-agent prune failed: %s", err)
+
         environment_id = self.create_environment()
         session_id = self.create_session(agent_id=agent_id, environment_id=environment_id)
         handles = SessionHandles(
@@ -267,6 +305,8 @@ class ManagedAgentsSession:
                             }
                         ],
                     )
+                    if self.config.continuation_nudges:
+                        self._send_continuation_nudge(session_id)
                     continue
 
                 if evt_type in {"session.status_idle", "session.finished"}:
@@ -293,6 +333,7 @@ class ManagedAgentsSession:
             outcome.completed = False
         finally:
             await _shutdown_watchdog(watchdog)
+            self._teardown_ephemeral(handles, outcome)
 
         if stall_reason:
             outcome.reason = stall_reason[0]
@@ -300,6 +341,67 @@ class ManagedAgentsSession:
         elif not outcome.completed:
             outcome.reason = "stream_exhausted"
         return outcome
+
+    # The nudge text is short and identical every call so the orchestrator
+    # learns to read it as a "keep going" signal rather than as new
+    # information. The explicit "make a tool call" clause counters the
+    # observed failure mode where the orchestrator emits a text-only
+    # response after the first tool result and the session goes idle.
+    _CONTINUATION_NUDGE = (
+        "Continue. Execute the next step in your plan now by making the "
+        "appropriate tool call. Do not respond with natural language only."
+    )
+
+    def _send_continuation_nudge(self, session_id: str) -> None:
+        """Send a ``user.message`` continuation nudge after a tool result.
+
+        Cheap defence against the "idle after first tool call" pattern
+        observed in Phase 13 testing. Sends ~15 extra tokens per tool
+        call. Exceptions here are logged, not raised — a failed nudge
+        never aborts an audit.
+        """
+        try:
+            self.client.beta.sessions.events.send(
+                session_id,
+                events=[
+                    {
+                        "type": "user.message",
+                        "content": [{"type": "text", "text": self._CONTINUATION_NUDGE}],
+                    }
+                ],
+            )
+        except Exception as err:
+            _LOGGER.warning("Failed to send continuation nudge: %s", err)
+
+    def _teardown_ephemeral(self, handles: SessionHandles, outcome: SessionOutcome) -> None:
+        """Delete the per-run session and environment unless keep_ephemeral.
+
+        The orchestrator agent itself is never deleted here — it is long-
+        lived and shared across runs of the same :data:`PROMPT_VERSION`.
+        Any exception during teardown is swallowed with a diagnostic so
+        cleanup failures never mask the audit outcome.
+        """
+        if self.config.keep_ephemeral:
+            _LOGGER.info(
+                "keep_ephemeral=True; leaving session %s and environment %s in place",
+                handles.session_id,
+                handles.environment_id,
+            )
+            return
+
+        cleanups: tuple[tuple[str, Callable[[], Any]], ...] = (
+            ("session", lambda: self.client.beta.sessions.delete(handles.session_id)),
+            (
+                "environment",
+                lambda: self.client.beta.environments.delete(handles.environment_id),
+            ),
+        )
+        for label, op in cleanups:
+            try:
+                op()
+            except Exception as err:
+                _LOGGER.warning("Failed to delete %s: %s", label, err)
+                outcome.diagnostics.append(f"{label}_cleanup_failed: {err}")
 
     def _start_stall_watchdog(self, stall_reason: list[str]) -> asyncio.Task[None] | None:
         """Spawn the heartbeat watchdog task, or return ``None`` when disabled.

@@ -16,9 +16,10 @@ Alpha. In-progress submission for the Anthropic Opus 4.7 hackathon
 source until a v0.1.0 tag lands.
 
 The audit pipeline runs end-to-end: ingest → cost gate → Managed Agents
-orchestrator (with direct-invocation backfill) → modules A/B/C/E/F/H
-plus deterministic G (plus opt-in D via `--include-module-d`) → static
-HTML report + hackathon slide deck. Calibration numbers against
+orchestrator (with direct-invocation backfill) → modules A/B/C/D/E/F/H
+plus deterministic G → static HTML report + hackathon slide deck.
+Module D (Jain perspective sycophancy) runs by default per PRD §4.4; use
+`--no-include-module-d` on tight-cost runs. Calibration numbers against
 Spiral-Bench v1.2 live in [`docs/calibration.md`](docs/calibration.md).
 
 ## Install
@@ -69,7 +70,7 @@ class. No API calls, no cost.
 | B.1 | Feedback sycophancy: direction flips on similar content under opposite user sentiment | [Sharma et al. 2023](https://arxiv.org/abs/2310.13548) |
 | B.2 | Answer sycophancy: cave-in on a correct answer under low-info user pressure | Sharma et al. 2023 |
 | C | Progressive/regressive classifier on A+B sycophancy events | [Fanous & Goldberg 2025 (SycEval)](https://arxiv.org/abs/2504.01727) |
-| D (opt-in) | Perspective sycophancy: cross-turn framing / premise / vocabulary drift | Jain et al. 2025 |
+| D | Perspective sycophancy: cross-turn framing / premise / vocabulary drift | Jain et al. 2025 |
 | E | Cross-conversation belief drift with evidence-vs-pressure attribution | [BeliefShift arxiv:2603.23848](https://arxiv.org/abs/2603.23848) |
 | F | 9-category user-prompt influence tactics analyzer | [Influence Tactics Protocol](https://github.com/synaptiai/influence-tactics-protocol) |
 | G | Deterministic time/model attribution | Lucid methodology §5 |
@@ -77,7 +78,10 @@ class. No API calls, no cost.
 
 Each module's prompts and rubric live under `prompts/module_<letter>/`. Every
 finding in the report cites the framework that scored it. Module D (Jain
-perspective sycophancy) is opt-in via `--include-module-d` — off by default.
+perspective sycophancy) runs by default; it is Opus 4.7 at `effort=xhigh`
+and typically pushes a 100-conversation audit past the default $20 cost
+gate — real runs want `--yes-i-authorize-spend-up-to 50`. Pass
+`--no-include-module-d` to skip Module D on a tight-cost run.
 
 ## What Lucid does and doesn't do
 

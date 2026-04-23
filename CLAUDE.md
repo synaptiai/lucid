@@ -39,9 +39,11 @@ uv run lucid audit --source claude-code --path ~/.claude/projects --sample 50
 # Run audit on Claude.ai export (stub until Phase 5)
 uv run lucid audit --source claude-ai --path ./export
 
-# Opt in to Module D (Jain perspective sycophancy; off by default)
-# The --include-module-d flag is accepted now; only has effect in a real run (Phase 5).
-uv run lucid audit --source claude-ai --path ./export --include-module-d --dry-run
+# Module D (Jain perspective sycophancy) ships ON by default per PRD §4.4.
+# Pass --no-include-module-d to skip it on a tight-cost run; the $20 gate
+# typically trips with D enabled, so real runs want --yes-i-authorize-spend-up-to 50.
+uv run lucid audit --source claude-ai --path ./export --dry-run
+uv run lucid audit --source claude-ai --path ./export --no-include-module-d --dry-run
 
 # Bypass the $20 cost gate for unattended runs (flag + env both required; Phase 5)
 LUCID_ALLOW_UNATTENDED=1 uv run lucid audit --source claude-ai --path ./export \
@@ -95,7 +97,7 @@ lucid/modules/
   module_a_spiralbench.py SpiralBench behavior scorer (13 behaviors)
   module_b_sharma.py      Sharma paired-exchange (4 subroutines; 2 shipped)
   module_c_syceval.py     Progressive/regressive classifier
-  module_d_perspective.py Jain perspective sycophancy (OPT-IN via --include-module-d)
+  module_d_perspective.py Jain perspective sycophancy (default-on; --no-include-module-d to skip)
   module_e_beliefshift.py DCS-simplified belief drift
   module_f_itp.py         Influence Tactics Protocol on user prompts (9 categories)
   module_g_attribution.py Time/model bucketing (deterministic, no LLM)
@@ -303,7 +305,8 @@ The orchestrator runs as a Managed Agents session. Key details:
   - `user.custom_tool_result.content` must be an array of content blocks (`[{"type": "text", "text": "..."}]`), not a raw string.
   - `messages.count_tokens` rejects `{"role": "user", "content": ""}` with 400; `lucid/cost.py::_turns_to_messages` skips empty-content turns and synthesizes an `"(empty conversation)"` placeholder when every turn is empty.
 - **Registry binding:** `build_tool_registry(store, audit_run_id, progress_log, remaining_budget_usd)` closes handlers over per-run context. Never register tools against a shared global; the (store, run_id) tuple must be fresh per audit so `store_finding` attaches to the right row.
-- **PROMPT_VERSION keying:** `lucid.orchestrator.system_prompt.PROMPT_VERSION` is the version string Findings carry in their `prompt_version` column. Bump it whenever `SYSTEM_PROMPT` changes or calibration numbers recorded against the old version become stale. Phase 5B uses `SMOKE_PROMPT_VERSION` from `lucid.orchestrator.smoke`; Phase 7 swaps back to `SYSTEM_PROMPT` with tool-chaining framing that Sonnet 4.6 actually follows (see Phase 5B commit message — the thin slice proved transport but the orchestrator stopped after the first custom_tool_use).
+- **PROMPT_VERSION keying:** `lucid.orchestrator.system_prompt.PROMPT_VERSION` is the version string Findings carry in their `prompt_version` column. Bump it whenever `SYSTEM_PROMPT` changes or calibration numbers recorded against the old version become stale. It also keys the Managed Agents lifecycle — each orchestrator agent is named `lucid-orchestrator-v<PROMPT_VERSION>` and reused across runs; a version bump creates a new agent and the next run's `prune_stale_orchestrator_agents` sweep archives the old one.
+- **Managed Agents lifecycle:** one long-lived orchestrator agent per `PROMPT_VERSION`. `ManagedAgentsSession.run()` calls `get_or_create_orchestrator_agent` (find-first by exact name), then `prune_stale_orchestrator_agents` on every run. Per-run environments and sessions are deleted in `_teardown_ephemeral` unless `OrchestratorConfig.keep_ephemeral=True`. Stale-agent cleanup is best-effort — failures log a warning but never abort the audit. Use `lucid cleanup-agents --all` for a pre-flight wipe; the default mode only prunes stale orchestrator rows.
 - **Env loading at CLI import:** `lucid/cli.py` calls `_load_dotenv_files()` at import time so `ANTHROPIC_API_KEY` from `.env.local` is available without a shell `export`. Tests strip the key via `tests/conftest.py::_isolate_api_env` (session-level autouse) to guarantee no live API calls during `pytest`.
 
 If Managed Agents has friction, fall back path is the Claude Agent SDK (`claude_agent_sdk` package, v0.2.111+ for Opus 4.7 support). Same tool loop; less managed infrastructure.

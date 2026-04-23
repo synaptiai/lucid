@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -63,25 +64,65 @@ class _FakeEventsEndpoint:
 class _FakeSessions:
     def __init__(self, stream: _FakeStreamCtx) -> None:
         self.events = _FakeEventsEndpoint(stream)
+        self.deleted_ids: list[str] = []
 
     def create(self, **kwargs: Any) -> _FakeEntity:
         _ = kwargs
         return _FakeEntity(id_="sess-fake")
 
+    def delete(self, session_id: str, **_kwargs: Any) -> Any:
+        self.deleted_ids.append(session_id)
+        return MagicMock(id=session_id, deleted=True)
+
+
+class _FakeNamedAgent:
+    """Agent entity with both id and name, for list() responses."""
+
+    def __init__(self, id_: str, name: str) -> None:
+        self.id = id_
+        self.name = name
+
 
 class _FakeAgents:
-    def __init__(self) -> None:
-        self.last_create_kwargs: dict[str, Any] | None = None
+    """Fake of ``client.beta.agents`` covering create / list / archive.
 
-    def create(self, **kwargs: Any) -> _FakeEntity:
+    ``prepopulated`` simulates existing agents the caller should discover
+    via ``list()``. ``archived_ids`` records every soft-delete so tests
+    can assert on stale-prune behaviour.
+    """
+
+    def __init__(self, prepopulated: list[_FakeNamedAgent] | None = None) -> None:
+        self.last_create_kwargs: dict[str, Any] | None = None
+        self._agents: list[_FakeNamedAgent] = list(prepopulated or [])
+        self.archived_ids: list[str] = []
+
+    def create(self, **kwargs: Any) -> _FakeNamedAgent:
         self.last_create_kwargs = kwargs
-        return _FakeEntity(id_="agent-fake")
+        created = _FakeNamedAgent(id_="agent-fake", name=str(kwargs.get("name", "agent-fake")))
+        self._agents.append(created)
+        return created
+
+    def list(self, *, include_archived: bool = False, **_kwargs: Any) -> list[_FakeNamedAgent]:
+        _ = include_archived
+        return list(self._agents)
+
+    def archive(self, agent_id: str, **_kwargs: Any) -> Any:
+        self.archived_ids.append(agent_id)
+        self._agents = [a for a in self._agents if a.id != agent_id]
+        return MagicMock(id=agent_id, archived=True)
 
 
 class _FakeEnvironments:
+    def __init__(self) -> None:
+        self.deleted_ids: list[str] = []
+
     def create(self, **kwargs: Any) -> _FakeEntity:
         _ = kwargs
         return _FakeEntity(id_="env-fake")
+
+    def delete(self, environment_id: str, **_kwargs: Any) -> Any:
+        self.deleted_ids.append(environment_id)
+        return MagicMock(id=environment_id, deleted=True)
 
 
 class _FakeBeta:
@@ -160,6 +201,74 @@ async def test_session_completes_on_status_idle(tmp_path: Path) -> None:
     store.close()
 
 
+async def test_session_sends_continuation_nudge_when_enabled(tmp_path: Path) -> None:
+    """When ``continuation_nudges=True`` (opt-in), the session injects a
+    ``user.message`` nudge after each tool_result. The nudge is opt-in
+    because the Managed Agents event-state machine rejects
+    ``user.message`` during the "waiting on user.custom_tool_result"
+    window (HTTP 400, verified in run-9b7031f168cf). Kept behind a flag
+    for future experimentation with timing / event-type variations."""
+    events: list[dict[str, Any]] = [
+        {"type": "session.status_active"},
+        {
+            "type": "agent.custom_tool_use",
+            "name": "query_corpus",
+            "input": {},
+            "tool_use_id": "tu-1",
+        },
+        {"type": "session.status_idle"},
+    ]
+    stream = _FakeStreamCtx(events)
+    client = _FakeClient(stream)
+
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    session = ManagedAgentsSession(
+        client=client,
+        registry=registry,
+        config=OrchestratorConfig(run_id=run_id, continuation_nudges=True),
+    )
+
+    await session.run(kickoff_message="kickoff")
+
+    sent_types = [evt["type"] for batch in client.beta.sessions.events.sent_events for evt in batch]
+    # With nudges on: kickoff user.message, tool_result, continuation nudge.
+    assert sent_types == ["user.message", "user.custom_tool_result", "user.message"]
+    # The nudge body is the canonical continuation text.
+    nudge_batch = client.beta.sessions.events.sent_events[-1]
+    assert "Continue" in nudge_batch[0]["content"][0]["text"]
+    store.close()
+
+
+async def test_session_no_nudge_by_default(tmp_path: Path) -> None:
+    """Default ``continuation_nudges=False`` sends no nudges — matches
+    the shipping configuration verified against the live SDK."""
+    events: list[dict[str, Any]] = [
+        {"type": "session.status_active"},
+        {
+            "type": "agent.custom_tool_use",
+            "name": "query_corpus",
+            "input": {},
+            "tool_use_id": "tu-1",
+        },
+        {"type": "session.status_idle"},
+    ]
+    stream = _FakeStreamCtx(events)
+    client = _FakeClient(stream)
+
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    session = ManagedAgentsSession(
+        client=client, registry=registry, config=OrchestratorConfig(run_id=run_id)
+    )
+
+    await session.run(kickoff_message="kickoff")
+
+    sent_types = [evt["type"] for batch in client.beta.sessions.events.sent_events for evt in batch]
+    assert sent_types == ["user.message", "user.custom_tool_result"]
+    store.close()
+
+
 async def test_session_dispatches_custom_tool_call(tmp_path: Path) -> None:
     events: list[dict[str, Any]] = [
         {"type": "session.status_active"},
@@ -221,6 +330,114 @@ async def test_session_create_agent_includes_all_custom_tools(tmp_path: Path) ->
 def test_beta_header_constant_matches_methodology() -> None:
     # Locked in methodology.md §1 — change here should be paired with a doc update.
     assert MANAGED_AGENTS_BETA_HEADER == "managed-agents-2026-04-01"
+
+
+async def test_session_reuses_existing_versioned_agent(tmp_path: Path) -> None:
+    """When a current-version agent already exists, ``run()`` reuses it
+    instead of creating a new one — one warm agent per PROMPT_VERSION.
+    """
+    from lucid.orchestrator.lifecycle import current_orchestrator_agent_name
+
+    stream = _FakeStreamCtx([{"type": "session.status_idle"}])
+    client = _FakeClient(stream)
+    # Prepopulate with the current-version orchestrator.
+    existing_name = current_orchestrator_agent_name()
+    client.beta.agents._agents.append(_FakeNamedAgent("agent-existing", existing_name))
+
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    session = ManagedAgentsSession(
+        client=client, registry=registry, config=OrchestratorConfig(run_id=run_id)
+    )
+
+    outcome = await session.run(kickoff_message="kickoff")
+    assert outcome.handles.agent_id == "agent-existing"
+    # create() must not have been called — we reused the existing row.
+    assert client.beta.agents.last_create_kwargs is None
+    store.close()
+
+
+async def test_session_prunes_stale_orchestrator_agents(tmp_path: Path) -> None:
+    """Stale ``lucid-orchestrator-*`` agents (different version) get archived
+    on every run; foreign ``lucid-*`` agents are left alone."""
+    stream = _FakeStreamCtx([{"type": "session.status_idle"}])
+    client = _FakeClient(stream)
+    client.beta.agents._agents.extend(
+        [
+            _FakeNamedAgent("agent-old-v0", "lucid-orchestrator-v0"),
+            _FakeNamedAgent("agent-smoke", "lucid-smoke-1"),
+        ]
+    )
+
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    session = ManagedAgentsSession(
+        client=client, registry=registry, config=OrchestratorConfig(run_id=run_id)
+    )
+
+    await session.run(kickoff_message="kickoff")
+
+    assert "agent-old-v0" in client.beta.agents.archived_ids
+    assert "agent-smoke" not in client.beta.agents.archived_ids  # foreign, leave it
+    store.close()
+
+
+async def test_session_deletes_ephemeral_env_and_session_by_default(tmp_path: Path) -> None:
+    """The per-run environment and session are deleted in the finally block."""
+    stream = _FakeStreamCtx([{"type": "session.status_idle"}])
+    client = _FakeClient(stream)
+
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    session = ManagedAgentsSession(
+        client=client, registry=registry, config=OrchestratorConfig(run_id=run_id)
+    )
+
+    outcome = await session.run(kickoff_message="kickoff")
+
+    assert outcome.handles.environment_id in client.beta.environments.deleted_ids
+    assert outcome.handles.session_id in client.beta.sessions.deleted_ids
+    store.close()
+
+
+async def test_session_keeps_ephemeral_when_flag_set(tmp_path: Path) -> None:
+    """``keep_ephemeral=True`` skips the per-run teardown (debugging)."""
+    stream = _FakeStreamCtx([{"type": "session.status_idle"}])
+    client = _FakeClient(stream)
+
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    config = OrchestratorConfig(run_id=run_id, keep_ephemeral=True)
+    session = ManagedAgentsSession(client=client, registry=registry, config=config)
+
+    await session.run(kickoff_message="kickoff")
+
+    assert client.beta.environments.deleted_ids == []
+    assert client.beta.sessions.deleted_ids == []
+    store.close()
+
+
+async def test_session_teardown_failure_does_not_mask_outcome(tmp_path: Path) -> None:
+    """A raising delete() records a diagnostic but lets run() return normally."""
+    stream = _FakeStreamCtx([{"type": "session.status_idle"}])
+    client = _FakeClient(stream)
+
+    def _boom(_id: str, **_kwargs: Any) -> None:
+        raise RuntimeError("SDK 500")
+
+    client.beta.sessions.delete = _boom  # type: ignore[method-assign]
+
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    session = ManagedAgentsSession(
+        client=client, registry=registry, config=OrchestratorConfig(run_id=run_id)
+    )
+
+    outcome = await session.run(kickoff_message="kickoff")
+
+    assert outcome.completed is True
+    assert any("session_cleanup_failed" in d for d in outcome.diagnostics)
+    store.close()
 
 
 # ──────────────────────────────────────────────────────────────────────────

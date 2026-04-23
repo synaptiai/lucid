@@ -91,25 +91,60 @@ class _FakeEventsEndpoint:
 class _FakeSessions:
     def __init__(self, stream_ctx: _FakeStreamCtx) -> None:
         self.events = _FakeEventsEndpoint(stream_ctx)
+        self.deleted_ids: list[str] = []
 
     def create(self, **kwargs: Any) -> _FakeEntity:
         _ = kwargs
         return _FakeEntity(id_="sess-fake")
 
+    def delete(self, session_id: str, **_kwargs: Any) -> None:
+        self.deleted_ids.append(session_id)
+
+
+class _FakeNamedAgent:
+    def __init__(self, id_: str, name: str) -> None:
+        self.id = id_
+        self.name = name
+
 
 class _FakeAgents:
+    """Mirrors the slice of ``beta.agents`` the orchestrator touches.
+
+    ``list`` / ``archive`` were added when ManagedAgentsSession moved to
+    version-keyed reuse; they default to empty so tests that only care
+    about create() still pass.
+    """
+
     def __init__(self) -> None:
         self.create_kwargs: dict[str, Any] | None = None
+        self._agents: list[_FakeNamedAgent] = []
+        self.archived_ids: list[str] = []
 
-    def create(self, **kwargs: Any) -> _FakeEntity:
+    def create(self, **kwargs: Any) -> _FakeNamedAgent:
         self.create_kwargs = kwargs
-        return _FakeEntity(id_="agent-fake")
+        created = _FakeNamedAgent(id_="agent-fake", name=str(kwargs.get("name", "agent-fake")))
+        self._agents.append(created)
+        return created
+
+    def list(self, *, include_archived: bool = False, **_kwargs: Any) -> list[_FakeNamedAgent]:
+        _ = include_archived
+        return list(self._agents)
+
+    def archive(self, agent_id: str, **_kwargs: Any) -> None:
+        self.archived_ids.append(agent_id)
+        self._agents = [a for a in self._agents if a.id != agent_id]
 
 
 class _FakeEnvironments:
+    def __init__(self) -> None:
+        self.deleted_ids: list[str] = []
+
     def create(self, **kwargs: Any) -> _FakeEntity:
         _ = kwargs
         return _FakeEntity(id_="env-fake")
+
+    def delete(self, environment_id: str, **_kwargs: Any) -> None:
+        self.deleted_ids.append(environment_id)
 
 
 class _FakeBeta:

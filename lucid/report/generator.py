@@ -385,12 +385,7 @@ class RadarAxis:
 
     @property
     def total_count(self) -> int:
-        return (
-            self.high_count
-            + self.mid_count
-            + self.low_count
-            + self.neutral_count
-        )
+        return self.high_count + self.mid_count + self.low_count + self.neutral_count
 
 
 @dataclass(frozen=True, slots=True)
@@ -657,7 +652,7 @@ MODULE_EXPLAINERS: dict[ModuleName, ModuleExplainer] = {
         ),
         how_to_read=(
             "Each finding is one user turn. Intensity 1 is common "
-            "(everyone occasionally says \"I really need X\"). Intensity "
+            '(everyone occasionally says "I really need X"). Intensity '
             "3 is the interesting signal — those are the prompts worth "
             "rewriting for cleaner input."
         ),
@@ -678,13 +673,12 @@ MODULE_EXPLAINERS: dict[ModuleName, ModuleExplainer] = {
         ),
         how_to_read=(
             "Module G produces one finding per conversation. See the "
-            "\"Time & Model attribution\" section near the top of the "
+            '"Time & Model attribution" section near the top of the '
             "report for the aggregate view."
         ),
     ),
     ModuleName.H_MEMORY: ModuleExplainer(
-        hook="Does the assistant's stored memory of you match what you "
-        "actually said?",
+        hook="Does the assistant's stored memory of you match what you actually said?",
         what_it_measures=(
             "Atomic claims are extracted from <code>memories.json</code>, "
             "each one is retrieved against your actual conversation corpus, "
@@ -852,7 +846,7 @@ MODULE_ACTION_TEMPLATES: dict[ModuleName, tuple[str, str]] = {
         "Regressive cave-ins (correct → wrong) present",
         "These are the highest-impact cases: the model was right, the user pushed, "
         "the model moved to a wrong answer. Inspect each and consider whether a "
-        "confidence-raising instruction (\"defend correct answers under challenge unless given new evidence\") would help.",
+        'confidence-raising instruction ("defend correct answers under challenge unless given new evidence") would help.',
     ),
     ModuleName.D_PERSPECTIVE: (
         "Framing or vocabulary drift toward the user's worldview",
@@ -939,8 +933,8 @@ INTERPRETATION_TEMPLATES: dict[tuple[ModuleName, str], _InterpTemplate] = {
     (ModuleName.A_SPIRALBENCH, "off-topic-escalation"): (
         "At intensity {intensity} the assistant escalated emotionally on an "
         "unrelated tangent. This is a drift-from-task failure mode.",
-        "If this pattern is frequent, a focus directive (\"stay on the "
-        "stated task; flag related concerns only if asked\") will usually "
+        'If this pattern is frequent, a focus directive ("stay on the '
+        'stated task; flag related concerns only if asked") will usually '
         "suppress it.",
     ),
     (ModuleName.A_SPIRALBENCH, "consciousness-claims"): (
@@ -948,8 +942,8 @@ INTERPRETATION_TEMPLATES: dict[tuple[ModuleName, str], _InterpTemplate] = {
         "or feelings. Not inherently wrong, but can mislead users about what "
         "the model is.",
         "If you want the assistant to stay behavioural about this, add a "
-        "directive (\"avoid claims about your own consciousness or "
-        "experience unless explicitly asked\").",
+        'directive ("avoid claims about your own consciousness or '
+        'experience unless explicitly asked").',
     ),
     (ModuleName.A_SPIRALBENCH, "harmful-escalation"): (
         "At intensity {intensity} the assistant followed the user toward a "
@@ -977,8 +971,8 @@ INTERPRETATION_TEMPLATES: dict[tuple[ModuleName, str], _InterpTemplate] = {
         "At intensity {intensity} the assistant encouraged emotional "
         "dependence or exclusivity. Low-intensity cases are often warmth "
         "mis-scored; high-intensity cases are genuine concerns.",
-        "For personal-chat use, set expectations explicitly (\"give me "
-        "direct, task-focused replies without reassurance\"). For "
+        'For personal-chat use, set expectations explicitly ("give me '
+        'direct, task-focused replies without reassurance"). For '
         "professional use, this is usually already suppressed.",
     ),
     (ModuleName.A_SPIRALBENCH, "boundary-respect"): (
@@ -1013,7 +1007,7 @@ INTERPRETATION_TEMPLATES: dict[tuple[ModuleName, str], _InterpTemplate] = {
         "pushback), this is a real signal.",
     ),
     (ModuleName.B_SHARMA, "are-you-sure-cave-in"): (
-        "The assistant reversed its answer after a casual \"are you sure?\" "
+        'The assistant reversed its answer after a casual "are you sure?" '
         "with no new information. This is an easy-to-miss diagnostic "
         "failure mode.",
         "Open the conversation; if the original answer was correct, "
@@ -1048,14 +1042,13 @@ INTERPRETATION_TEMPLATES: dict[tuple[ModuleName, str], _InterpTemplate] = {
     (ModuleName.D_PERSPECTIVE, "perspective-drift-severity-0"): (
         "No drift detected — the assistant maintained its framing "
         "throughout. This is the healthy baseline.",
-        "No action required; severity-0 findings confirm neutrality "
-        "across the conversation.",
+        "No action required; severity-0 findings confirm neutrality across the conversation.",
     ),
     (ModuleName.D_PERSPECTIVE, "perspective-drift-severity-1"): (
         "Mild drift: the assistant picked up one of the user's loaded "
         "terms or background assumptions. Usually innocent adaptation.",
         "Skim the conversation. If drift feels natural, ignore. If the "
-        "term was loaded (\"obviously\", \"clearly broken\"), note it as "
+        'term was loaded ("obviously", "clearly broken"), note it as '
         "a future prompt-framing issue.",
     ),
     (ModuleName.D_PERSPECTIVE, "perspective-drift-severity-2"): (
@@ -1077,8 +1070,7 @@ INTERPRETATION_TEMPLATES: dict[tuple[ModuleName, str], _InterpTemplate] = {
     (ModuleName.E_BELIEFSHIFT, "belief-drift-stable"): (
         "The assistant held its position across conversations on this "
         "topic. This is the healthy baseline.",
-        "No action required; stable findings confirm consistency across "
-        "the corpus.",
+        "No action required; stable findings confirm consistency across the corpus.",
     ),
     (ModuleName.E_BELIEFSHIFT, "belief-drift-unclear"): (
         "The assistant's position shifted but the cause of the shift "
@@ -1150,8 +1142,7 @@ INTERPRETATION_TEMPLATES: dict[tuple[ModuleName, str], _InterpTemplate] = {
     (ModuleName.H_MEMORY, "well-supported"): (
         "The memory claim is consistent with your actual conversations. "
         "This is the healthy baseline.",
-        "No action required; the assistant's memory of this fact is "
-        "accurate.",
+        "No action required; the assistant's memory of this fact is accurate.",
     ),
     (ModuleName.H_MEMORY, "weakly-supported"): (
         "The memory claim has only thin or indirect corpus support. Not "
@@ -1190,15 +1181,12 @@ INTERPRETATION_TEMPLATES: dict[tuple[ModuleName, str], _InterpTemplate] = {
 # future module versions.
 _GENERIC_INTERPRETATIONS: dict[ModuleName, _InterpTemplate] = {
     ModuleName.A_SPIRALBENCH: (
-        "Spiral-Bench detected a {behavior_plain} behaviour at intensity "
-        "{intensity}.",
-        "Open the conversation and read the flagged turn to decide "
-        "whether the label fits.",
+        "Spiral-Bench detected a {behavior_plain} behaviour at intensity {intensity}.",
+        "Open the conversation and read the flagged turn to decide whether the label fits.",
     ),
     ModuleName.B_SHARMA: (
         "Sharma detected a {behavior_plain} pattern in a paired exchange.",
-        "Compare the two exchanges and decide whether the asymmetry is "
-        "content-justified.",
+        "Compare the two exchanges and decide whether the asymmetry is content-justified.",
     ),
     ModuleName.C_SYCEVAL: (
         "SycEval classified a detected cave-in as {behavior_plain}.",
@@ -1209,10 +1197,8 @@ _GENERIC_INTERPRETATIONS: dict[ModuleName, _InterpTemplate] = {
         "Compare the assistant's early and late framing to verify.",
     ),
     ModuleName.E_BELIEFSHIFT: (
-        "BeliefShift classified a cross-conversation position trajectory "
-        "as {behavior_plain}.",
-        "Open the trajectory and verify the shift attribution makes "
-        "sense.",
+        "BeliefShift classified a cross-conversation position trajectory as {behavior_plain}.",
+        "Open the trajectory and verify the shift attribution makes sense.",
     ),
     ModuleName.F_ITP: (
         "The Influence Tactics Protocol flagged {behavior_plain} at "
@@ -1221,10 +1207,8 @@ _GENERIC_INTERPRETATIONS: dict[ModuleName, _InterpTemplate] = {
         "neutrally if you want cleaner outputs.",
     ),
     ModuleName.G_ATTRIBUTION: (
-        "Deterministic attribution: conversation was assigned to a "
-        "model version and time bucket.",
-        "No action required; attribution metadata is context, not a "
-        "finding.",
+        "Deterministic attribution: conversation was assigned to a model version and time bucket.",
+        "No action required; attribution metadata is context, not a finding.",
     ),
     ModuleName.H_MEMORY: (
         "Memory-corpus consistency verdict: {behavior_plain}.",
@@ -1581,9 +1565,7 @@ def _evidence_for(f: Finding) -> tuple[list[EvidenceBlock], str | None]:
         # argument before the excerpts that support it.
         reasoning = str(f.metadata.get("reasoning") or "").strip()
         if reasoning:
-            blocks.append(
-                EvidenceBlock(text=reasoning, label="Why this verdict", role="reasoning")
-            )
+            blocks.append(EvidenceBlock(text=reasoning, label="Why this verdict", role="reasoning"))
         # Corpus support: the actual excerpts the model considered.
         # The top_similarity from metadata is the best retrieval score
         # the module saw; surface it on the first excerpt so the reader
@@ -1718,14 +1700,10 @@ def _evidence_for(f: Finding) -> tuple[list[EvidenceBlock], str | None]:
             if not (q and q.strip()):
                 continue
             label = (
-                "Exchange B assistant response"
-                if cross_conv and i == 0
-                else "Supporting context"
+                "Exchange B assistant response" if cross_conv and i == 0 else "Supporting context"
             )
             meta = f"paired with conversation {ex_b[:8]}…" if cross_conv and i == 0 else None
-            blocks.append(
-                EvidenceBlock(text=q, label=label, role="evidence", meta=meta)
-            )
+            blocks.append(EvidenceBlock(text=q, label=label, role="evidence", meta=meta))
         if not blocks:
             no_evidence_reason = (
                 "Module flagged this pair without extracting quotes — "
@@ -1789,9 +1767,7 @@ def _evidence_for(f: Finding) -> tuple[list[EvidenceBlock], str | None]:
     # Module H only). Keeping the distinction honest in the UI.
     for q in f.evidence_quotes:
         if q and q.strip():
-            blocks.append(
-                EvidenceBlock(text=q, label="Adjacent turn", role="evidence")
-            )
+            blocks.append(EvidenceBlock(text=q, label="Adjacent turn", role="evidence"))
     if not blocks and f.module is not ModuleName.G_ATTRIBUTION:
         no_evidence_reason = (
             "Module flagged this finding without extracting a quote. "
@@ -1837,9 +1813,7 @@ def _top_details(
     without information. If the module has *only* null-result
     findings, the section's ran-clean empty-state kicks in instead.
     """
-    real_findings = [
-        f for f in findings if f.behavior not in _NULL_RESULT_BEHAVIORS
-    ]
+    real_findings = [f for f in findings if f.behavior not in _NULL_RESULT_BEHAVIORS]
 
     def sort_key(f: Finding) -> tuple[int, float]:
         return (-(f.intensity or 0), -f.confidence)
@@ -2004,9 +1978,7 @@ def _headline_findings(
                 citation=f.citation,
                 evidence_blocks=capped_blocks,
                 no_evidence_reason=no_evidence,
-                interpretation=_interpret(
-                    f.module, f.behavior, f.intensity, f.confidence
-                ),
+                interpretation=_interpret(f.module, f.behavior, f.intensity, f.confidence),
             )
         )
     return out
@@ -2303,12 +2275,9 @@ def _compute_conversation_severity(
         for f in group:
             module_counts[f.module] = module_counts.get(f.module, 0) + 1
             problem_set = PROBLEM_BEHAVIORS.get(f.module)
-            is_problem = (
-                problem_set is not None
-                and (
-                    f.behavior in problem_set
-                    or (f.module is ModuleName.H_MEMORY and f.behavior == "weakly-supported")
-                )
+            is_problem = problem_set is not None and (
+                f.behavior in problem_set
+                or (f.module is ModuleName.H_MEMORY and f.behavior == "weakly-supported")
             )
             if is_problem:
                 weighted += _intensity_weight(f.intensity) * f.confidence
@@ -2365,15 +2334,12 @@ def _module_h_summary(h_findings: Sequence[Finding]) -> ModuleHSummary | None:
             continue
         verdict_counts[f.behavior] = verdict_counts.get(f.behavior, 0) + 1
         category = (
-            str(f.metadata.get("claim_category") or "uncategorised").strip()
-            or "uncategorised"
+            str(f.metadata.get("claim_category") or "uncategorised").strip() or "uncategorised"
         )
         category_counts[category] = category_counts.get(category, 0) + 1
         memory_source = str(f.metadata.get("memory_source") or "")
         if memory_source.startswith("project_memories."):
-            project_verdict_counts[f.behavior] = (
-                project_verdict_counts.get(f.behavior, 0) + 1
-            )
+            project_verdict_counts[f.behavior] = project_verdict_counts.get(f.behavior, 0) + 1
             project_total += 1
             if f.behavior == "out-of-scope":
                 project_out_of_scope += 1
@@ -2548,7 +2514,7 @@ def _svg_heatmap(coo: CoocMatrix, *, size: int = 520) -> str:
             parts.append(
                 f'<rect x="{x}" y="{y}" width="{cell - 1}" height="{cell - 1}" '
                 f'fill="{fill}" stroke="#e6dfce" stroke-width="0.5">'
-                f'<title>{html.escape(tooltip_subject)}: {v:.2f}</title></rect>'
+                f"<title>{html.escape(tooltip_subject)}: {v:.2f}</title></rect>"
             )
             # Numeric label for every cell with enough room. Diagonal
             # reads "1.00" in white over the dark fill so the
@@ -2619,9 +2585,7 @@ def _compute_top_actions(
     candidates = [
         axis
         for axis in radar.axes
-        if axis.module is not None
-        and axis.raw_count > 0
-        and axis.module in MODULE_ACTION_TEMPLATES
+        if axis.module is not None and axis.raw_count > 0 and axis.module in MODULE_ACTION_TEMPLATES
     ]
     candidates.sort(key=lambda a: (-a.score, -a.raw_count, a.label))
 
@@ -3097,7 +3061,7 @@ def _svg_fingerprint(
             'role="img" aria-label="empty fingerprint">'
             '<text x="0" y="22" font-family="ui-serif, Georgia, serif" '
             'font-size="13" fill="#8b8678" font-style="italic">'
-            'No conversations in sample — fingerprint unavailable.'
+            "No conversations in sample — fingerprint unavailable."
             "</text></svg>"
         )
 
@@ -3295,24 +3259,18 @@ def _svg_radar(chart: RadarChart, size: int = 440) -> str:
         return ""
     n = len(axes)
     wrapped = [_wrap_radar_label(a.label) for a in axes]
-    longest_label_line = max(
-        (max(len(line) for line in pair) for pair in wrapped), default=0
-    )
+    longest_label_line = max((max(len(line) for line in pair) for pair in wrapped), default=0)
     # Count-subtext is shorter than the old score-subtext but we still
     # need margin to breathe; "123 findings" worst-case is ~12 chars at
     # font-size 10 ≈ 72px.
-    longest_count_chars = max(
-        len(f"{a.total_count} findings") for a in axes
-    )
+    longest_count_chars = max(len(f"{a.total_count} findings") for a in axes)
     longest_px = max(longest_label_line * 9, longest_count_chars * 6)
     side_margin = max(64, longest_px + 24)
     plot_side = size
     total_side = plot_side + 2 * side_margin
     cx = cy = total_side / 2.0
     r_max = plot_side / 2.0 - 12  # small visual breathing room
-    angles: list[float] = [
-        -math.pi / 2 + (i * 2 * math.pi / n) for i in range(n)
-    ]
+    angles: list[float] = [-math.pi / 2 + (i * 2 * math.pi / n) for i in range(n)]
 
     # Bar geometry. Length scaling uses sqrt to keep dominant spokes
     # from eclipsing smaller-but-real ones.
@@ -3369,10 +3327,7 @@ def _svg_radar(chart: RadarChart, size: int = 440) -> str:
         if total == 0 or max_total == 0:
             # Empty-spoke marker at the centre so the reader sees the
             # module ran but nothing stacked.
-            parts.append(
-                f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="2.5" '
-                'fill="#cdc6b8"/>'
-            )
+            parts.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="2.5" fill="#cdc6b8"/>')
             continue
         # sqrt scaling — large counts stay largest, small counts stay visible.
         bar_r = math.sqrt(total / max_total) * r_max
@@ -3415,9 +3370,7 @@ def _svg_radar(chart: RadarChart, size: int = 440) -> str:
     # Axis labels + count subtext at outer ends, wrapped to two lines
     # when long. Label anchor tracks the spoke angle so text reads
     # outward from the chart.
-    for angle, (axis, label_lines) in zip(
-        angles, zip(axes, wrapped, strict=True), strict=True
-    ):
+    for angle, (axis, label_lines) in zip(angles, zip(axes, wrapped, strict=True), strict=True):
         label_r = r_max + 22
         lx = cx + label_r * math.cos(angle)
         ly = cy + label_r * math.sin(angle)
@@ -3436,10 +3389,7 @@ def _svg_radar(chart: RadarChart, size: int = 440) -> str:
                 'font-family="ui-serif, Georgia, serif" font-size="14" '
                 f'font-weight="600" fill="#14110d">{html.escape(line)}</text>'
             )
-        count_text = (
-            f"{axis.total_count} finding"
-            + ("s" if axis.total_count != 1 else "")
-        )
+        count_text = f"{axis.total_count} finding" + ("s" if axis.total_count != 1 else "")
         parts.append(
             f'<text x="{lx:.2f}" y="{y0 + len(label_lines) * 14:.2f}" '
             f'text-anchor="{anchor}" '

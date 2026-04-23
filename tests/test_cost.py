@@ -144,9 +144,7 @@ def test_turns_to_messages_strips_trailing_whitespace() -> None:
     ]
     messages = _turns_to_messages(turns)
     for msg in messages:
-        assert msg["content"] == msg["content"].strip(), (
-            f"trailing whitespace leaked: {msg!r}"
-        )
+        assert msg["content"] == msg["content"].strip(), f"trailing whitespace leaked: {msg!r}"
     assert messages[-1]["content"] == "hi back"
 
 

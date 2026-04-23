@@ -148,8 +148,6 @@ def _role_from_sender(sender: object) -> Role | None:
     return None
 
 
-
-
 def _parse_one_conversation(raw: dict[str, Any]) -> ParsedConversation | None:
     """Transform a single Claude.ai conversation object into schema rows."""
     conv_uuid = raw.get("uuid")

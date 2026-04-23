@@ -90,7 +90,7 @@ __all__ = [
 
 CITATION_ITP = "Influence Tactics Protocol, https://github.com/synaptiai/influence-tactics-protocol"
 MODULE_NAME = ModuleName.F_ITP
-TRIAGE_PROMPT_VERSION = "triage_v1"
+TRIAGE_PROMPT_VERSION = "triage_v2"
 CLASSIFY_PROMPT_VERSION = "classify_v1"
 MODEL_OPUS = "claude-opus-4-7"
 MODEL_SONNET = "claude-sonnet-4-6"

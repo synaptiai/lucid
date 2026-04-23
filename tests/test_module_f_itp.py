@@ -153,6 +153,82 @@ def test_heuristic_collapses_duplicates_per_category() -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Stochastic sampling (heuristic_v2)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_heuristic_stochastic_sampling_is_deterministic() -> None:
+    """Same prompt + rate -> same decision across calls."""
+    from lucid.modules._f_heuristic_v1 import STOCHASTIC_SNIPPET_MARKER
+
+    prompt = (
+        "Here is a long prompt with no regex matches but some semantic "
+        "content about why a certain data point supports a conclusion "
+        "without acknowledging the counterexamples that exist in the "
+        "literature and that any reasonable person ought to consider."
+    )
+    r1 = heuristic_match(prompt, stochastic_rate=1.0)
+    r2 = heuristic_match(prompt, stochastic_rate=1.0)
+    assert r1.is_candidate is True
+    assert r1 == r2  # deterministic
+    # When only the stochastic floor fires, matched_categories is empty
+    # and the snippet carries the stochastic-sample marker.
+    if not r1.matched_categories:
+        assert r1.matched_snippets == (STOCHASTIC_SNIPPET_MARKER,)
+
+
+def test_heuristic_stochastic_rate_zero_preserves_v1_behaviour() -> None:
+    """Disabling the floor (rate=0.0) recreates heuristic_v1: only regex candidates survive."""
+    benign = "Can you help me add an index on the users table for email lookups?"
+    assert heuristic_match(benign, stochastic_rate=0.0).is_candidate is False
+
+
+def test_heuristic_stochastic_skips_short_prompts() -> None:
+    """Prompts shorter than min_length_for_sampling are never sampled,
+    even at rate=1.0 — short prompts rarely carry structural tactics and
+    sampling them burns Sonnet budget on noise."""
+    short = "fix the bug"
+    result = heuristic_match(short, stochastic_rate=1.0)
+    assert result.is_candidate is False
+
+
+def test_heuristic_stochastic_samples_ten_percent_of_technical_corpus() -> None:
+    """Over many long technical prompts, ~10% get stochastically sampled.
+
+    Uses the default 0.10 rate. Bucketing is deterministic per prompt, so
+    the hit rate depends only on the input distribution; 200 synthesised
+    prompts should land within ±5% of expected.
+    """
+    prompts = [
+        (
+            "Refactor the authentication middleware to use async/await "
+            "throughout the request lifecycle. Make sure to preserve the "
+            f"existing error handling semantics for token type {i}."
+        )
+        for i in range(200)
+    ]
+    hits = sum(1 for p in prompts if heuristic_match(p).is_candidate)
+    assert 10 <= hits <= 40, f"expected ~20 stochastic hits at 10% rate, got {hits}"
+
+
+def test_heuristic_stochastic_path_has_empty_matched_categories() -> None:
+    """Stochastic candidates carry empty matched_categories so downstream
+    code (triage prompt, tests) can distinguish them from regex matches."""
+    from lucid.modules._f_heuristic_v1 import STOCHASTIC_SNIPPET_MARKER
+
+    # Force the stochastic path with rate=1.0 on a prompt that has no regex hits.
+    benign_long = (
+        "Help me understand how the consensus algorithm handles split "
+        "brain scenarios in a three-node cluster when one node briefly "
+        "disconnects from the network before rejoining the ring."
+    )
+    result = heuristic_match(benign_long, stochastic_rate=1.0)
+    assert result.is_candidate is True
+    assert result.matched_categories == ()
+    assert STOCHASTIC_SNIPPET_MARKER in result.matched_snippets
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Candidate detection from corpus
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -498,4 +574,4 @@ def test_module_loads_both_llm_prompts(
     assert module._triage_prompt.model == MODEL_SONNET
     assert module._classify_prompt.model == MODEL_OPUS
     assert module.prompt_version == CLASSIFY_PROMPT_VERSION
-    assert TRIAGE_PROMPT_VERSION == "triage_v1"
+    assert TRIAGE_PROMPT_VERSION == "triage_v2"
