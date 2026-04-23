@@ -46,6 +46,8 @@ corpus/
 !demo/corpus/
 !demo/corpus/**
 calibration-runs/
+.audit-logs/
+.imports/
 
 # Claude Code workspace (local-only)
 .claude/
@@ -55,3 +57,4 @@ calibration-runs/
 .vscode/
 *.swp
 *.swo
+.gstack/
