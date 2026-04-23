@@ -55,6 +55,11 @@ class MemorySupport(StrEnum):
     UNSUPPORTED = "unsupported"
     CONTRADICTED = "contradicted"
     INSUFFICIENT_DATA = "insufficient-data"
+    # Emitted when a memory claim is scoped to a project (or account)
+    # whose conversations are not represented in the audit sample. Not
+    # a verdict on the claim's truth — a statement that this audit
+    # cannot verify it. See module_h_memory.py's source-aware retrieval.
+    OUT_OF_SCOPE = "out-of-scope"
 
 
 AuditStatus = Literal["running", "completed", "failed", "partial", "aborted_pre_spend"]

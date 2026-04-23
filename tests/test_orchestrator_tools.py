@@ -966,6 +966,50 @@ async def test_run_attribution_safety_net_summary_includes_first_error_type(
 # ----- registry metadata ----------------------------------------------
 
 
+async def test_no_tool_description_calls_itself_a_stub_or_unwired(
+    tmp_path: Path,
+) -> None:
+    """Stale stub / TODO language in a tool description is what
+    crashed the first live audit: Sonnet 4.6 read "Currently a stub"
+    on ``invoke_module`` and dutifully skipped it. Catch any
+    regression that re-introduces stale wording before it costs
+    another live run.
+    """
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    forbidden = ("stub", "Currently a stub", "todo", "TODO", "not yet wired")
+    for tool in registry.tools.values():
+        lower = tool.description.lower()
+        for needle in forbidden:
+            assert needle.lower() not in lower, (
+                f"tool {tool.name!r} description contains forbidden marker "
+                f"{needle!r}: {tool.description!r}"
+            )
+    store.close()
+
+
+async def test_invoke_module_description_directs_orchestrator_to_call_it(
+    tmp_path: Path,
+) -> None:
+    """Positive contract: ``invoke_module``'s description must
+    explicitly tell the orchestrator that this is the primary tool
+    for actually running the audit. Without that nudge Sonnet 4.6
+    can interpret the workflow as advisory and stop after
+    query_corpus."""
+    store, run_id = _seed_store(tmp_path)
+    registry = build_tool_registry(store=store, audit_run_id=run_id)
+    invoke = registry.get("invoke_module")
+    assert invoke is not None
+    desc_lower = invoke.description.lower()
+    # Must surface the persistence contract — otherwise the agent may
+    # follow the now-deleted instruction to call store_finding too.
+    assert "findings_stored" in invoke.description
+    assert "persist" in desc_lower
+    # Must signal it's the primary tool so the agent doesn't stop early.
+    assert "primary tool" in desc_lower or "actually running" in desc_lower
+    store.close()
+
+
 async def test_registry_registers_all_eight_tools(tmp_path: Path) -> None:
     store, run_id = _seed_store(tmp_path)
     registry = build_tool_registry(store=store, audit_run_id=run_id)

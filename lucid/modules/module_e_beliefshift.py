@@ -603,7 +603,7 @@ class ModuleEBeliefShift:
         content = await self._call_with_retry(
             self._sonnet,
             model=MODEL_SONNET,
-            system_text=self._topics_prompt.body,
+            system_text=self._topics_prompt.padded_body,
             user_text=_render_summaries(sorted_convs, turns_by_conv_typed),
             max_tokens=MAX_TOPICS_OUTPUT_TOKENS,
         )
@@ -618,7 +618,7 @@ class ModuleEBeliefShift:
         content = await self._call_with_retry(
             self._opus,
             model=MODEL_OPUS,
-            system_text=self._positions_prompt.body,
+            system_text=self._positions_prompt.padded_body,
             user_text=_render_position_request(topic, conversation, turns),
             max_tokens=MAX_POSITIONS_OUTPUT_TOKENS,
         )
@@ -632,7 +632,7 @@ class ModuleEBeliefShift:
         content = await self._call_with_retry(
             self._opus,
             model=MODEL_OPUS,
-            system_text=self._drift_prompt.body,
+            system_text=self._drift_prompt.padded_body,
             user_text=_render_trajectory(topic, records),
             max_tokens=MAX_DRIFT_OUTPUT_TOKENS,
         )

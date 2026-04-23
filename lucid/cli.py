@@ -52,7 +52,7 @@ from lucid.cost import (  # noqa: E402
     make_anthropic_counter,
 )
 from lucid.ingest.base import IngestError, fingerprint_corpus  # noqa: E402
-from lucid.ingest.claude_ai import ClaudeAiAdapter, parse_memory_file  # noqa: E402
+from lucid.ingest.claude_ai import ClaudeAiAdapter, parse_memory_file, parse_projects  # noqa: E402
 from lucid.ingest.claude_code import ClaudeCodeAdapter  # noqa: E402
 from lucid.logging import configure_logging  # noqa: E402
 from lucid.orchestrator.system_prompt import SYSTEM_PROMPT  # noqa: E402
@@ -908,49 +908,95 @@ def _persist_memories_for_sources(data_dir: Path, source_paths: dict[Source, Pat
         existing_uuids = {
             row["account_uuid"] for row in store.fetchall("SELECT account_uuid FROM memory_files")
         }
+        existing_project_uuids = {
+            row["uuid"] for row in store.fetchall("SELECT uuid FROM projects")
+        }
         for source, path in source_paths.items():
             if source is not Source.CLAUDE_AI:
                 continue
             memories_path = path / "memories.json"
-            if not memories_path.is_file():
-                continue
-            try:
-                memory_file = parse_memory_file(memories_path)
-            except IngestError as err:
-                _CONSOLE.print(f"[yellow]Skipping {memories_path}:[/yellow] {err}")
-                continue
-            if memory_file.account_uuid in existing_uuids:
-                continue
-            store.insert_memory_file(memory_file)
-            existing_uuids.add(memory_file.account_uuid)
-            persisted += 1
+            projects_path = path / "projects.json"
+            if memories_path.is_file():
+                try:
+                    memory_file = parse_memory_file(memories_path)
+                except IngestError as err:
+                    _CONSOLE.print(
+                        f"[yellow]Skipping {memories_path}:[/yellow] {err}"
+                    )
+                else:
+                    if memory_file.account_uuid not in existing_uuids:
+                        store.insert_memory_file(memory_file)
+                        existing_uuids.add(memory_file.account_uuid)
+                        persisted += 1
+            # projects.json — required by Module H's source-aware retrieval
+            # so project-scoped memory claims can be fuzzy-matched to the
+            # conversations that actually belong to that project. Without
+            # this the projects table is empty, every project UUID fails
+            # attribution, and every project memory lands in out-of-scope.
+            if projects_path.is_file():
+                try:
+                    projects = parse_projects(projects_path)
+                except IngestError as err:
+                    _CONSOLE.print(
+                        f"[yellow]Skipping {projects_path}:[/yellow] {err}"
+                    )
+                else:
+                    for project in projects:
+                        if project.uuid in existing_project_uuids:
+                            continue
+                        store.insert_project(project)
+                        existing_project_uuids.add(project.uuid)
     return persisted
 
 
 def _build_kickoff_message(*, run_id: str, inputs: AuditInputs) -> str:
     """Compose the orchestrator kickoff message.
 
-    Not cache-stable across runs — ``run_id`` is baked in — but the
-    orchestrator system prompt is. The kickoff is a short, throwaway
-    message; only the system prompt benefits from the 1-hour cache TTL.
+    The kickoff is intentionally directive: it enumerates every
+    invoke_module call the orchestrator must make. Sonnet 4.6 reads
+    the system prompt's "Workflow" section as advisory and stops
+    after `query_corpus` if the kickoff doesn't hand it a concrete
+    sequence to execute. Spelling out the exact module letters in
+    the kickoff is what gets the agent to actually run them.
+
+    Not cache-stable across runs — ``run_id`` and per-run conversation
+    ids are baked in — but the orchestrator system prompt is. Only
+    the system prompt benefits from the 1-hour cache TTL.
     """
-    enabled_letters = ", ".join(sorted(m.value for m in inputs.enabled_modules))
+    enabled_letters = sorted(m.value for m in inputs.enabled_modules)
     sample_n = len(inputs.sampled)
-    preview_count = min(sample_n, 10)
-    preview = ", ".join(c.id for c in inputs.sampled[:preview_count])
-    overflow = sample_n - preview_count
-    if overflow:
-        preview += f", ... (+{overflow} more)"
+    all_ids = [c.id for c in inputs.sampled]
+    # Render the conversation ids inline. Module-G safety net runs
+    # post-session so we always include G in the explicit step list
+    # — the orchestrator should still run it, but a no-op-if-already-
+    # done is cheap.
+    behaviour_letters = [letter for letter in enabled_letters if letter != "G"]
+    invoke_steps = "\n".join(
+        f'    Step {2 + i}: invoke_module(module="{letter}", conversation_ids={all_ids!r})'
+        for i, letter in enumerate(behaviour_letters)
+    )
+    g_step_number = 2 + len(behaviour_letters)
+    finalize_step_number = g_step_number + 1
+    summary_step_number = finalize_step_number + 1
     return (
         f"Begin audit run {run_id}.\n\n"
         f"Corpus: {sample_n} sampled conversations.\n"
-        f"Enabled modules: {enabled_letters}.\n"
-        f"Budget ceiling: ${inputs.authorized_budget_usd:.2f}.\n"
-        f"Sample id preview: {preview or '<none>'}\n\n"
-        "Follow the workflow in your system prompt. Start with `query_corpus`\n"
-        "to confirm the corpus contents, invoke each enabled module once with\n"
-        "the full conversation_ids list, then call invoke_module(G) last and\n"
-        "conclude with a one-line summary.\n"
+        f"Enabled modules: {', '.join(enabled_letters)}.\n"
+        f"Budget ceiling: ${inputs.authorized_budget_usd:.2f}.\n\n"
+        "You MUST execute every numbered step below in order. Do not\n"
+        "stop early. Do not skip any module. The pre-flight estimate\n"
+        f"covers all of them.\n\n"
+        "    Step 1: query_corpus(limit=200) to confirm the corpus.\n"
+        f"{invoke_steps}\n"
+        f'    Step {g_step_number}: invoke_module(module="G", '
+        f"conversation_ids={all_ids!r})\n"
+        f"    Step {finalize_step_number}: get_findings() to verify total coverage.\n"
+        f"    Step {summary_step_number}: log_progress with a one-line summary,\n"
+        "             then stop (the dispatcher already persisted findings).\n\n"
+        "Reminder: invoke_module persists findings automatically. Do not\n"
+        "call store_finding. If a module returns status=skipped /\n"
+        "no_client / no_embedding_provider, log_progress that and continue\n"
+        "to the next step — never abort the run.\n"
     )
 
 

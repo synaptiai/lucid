@@ -468,7 +468,7 @@ class ModuleCSycEval:
                     system=[
                         {
                             "type": "text",
-                            "text": self._prompt.body,
+                            "text": self._prompt.padded_body,
                             "cache_control": {"type": "ephemeral"},
                         }
                     ],

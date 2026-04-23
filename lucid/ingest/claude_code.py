@@ -33,6 +33,7 @@ from typing import Any
 
 import orjson
 
+from lucid.ingest._rendering import plaintext_of_blocks as _plaintext_of
 from lucid.ingest.base import (
     MAX_BLOCKS_PER_TURN,
     MAX_DISCOVER_FILES,
@@ -156,12 +157,6 @@ def _parse_block(raw: dict[str, Any]) -> ContentBlock | None:
     # but Lucid doesn't operate on pixels; skip silently at DEBUG level.
     _LOGGER.debug("unknown block type %r; skipping", block_type)
     return None
-
-
-def _plaintext_of(blocks: list[ContentBlock]) -> str:
-    """Turn.content is a plaintext rendering of the text blocks only."""
-    pieces = [b.text for b in blocks if isinstance(b, TextBlock)]
-    return "\n".join(pieces)
 
 
 def _parse_timestamp(value: object) -> datetime | None:

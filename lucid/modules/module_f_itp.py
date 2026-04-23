@@ -443,7 +443,7 @@ class ModuleFITP:
         content = await self._call_with_retry(
             self._sonnet,
             model=MODEL_SONNET,
-            system_text=self._triage_prompt.body,
+            system_text=self._triage_prompt.padded_body,
             user_text=_render_triage_request(candidate),
             max_tokens=MAX_TRIAGE_OUTPUT_TOKENS,
         )
@@ -457,7 +457,7 @@ class ModuleFITP:
         content = await self._call_with_retry(
             self._opus,
             model=MODEL_OPUS,
-            system_text=self._classify_prompt.body,
+            system_text=self._classify_prompt.padded_body,
             user_text=_render_classify_request(candidate, triage),
             max_tokens=MAX_CLASSIFY_OUTPUT_TOKENS,
         )

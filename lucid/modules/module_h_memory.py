@@ -82,6 +82,7 @@ from lucid.schemas import (
     MemoryFile,
     MemorySupport,
     ModuleName,
+    Project,
     Role,
     Turn,
 )
@@ -392,6 +393,55 @@ def _iter_memory_chunks(
     return out
 
 
+_PROJECT_SOURCE_PREFIX = "project_memories."
+
+
+def _project_uuid_from_source(memory_source: str) -> str | None:
+    """Return the project UUID for a project-scoped memory source, else None."""
+    if memory_source.startswith(_PROJECT_SOURCE_PREFIX):
+        return memory_source[len(_PROJECT_SOURCE_PREFIX):]
+    return None
+
+
+def _build_project_attribution(
+    corpus: ModuleCorpus,
+    projects: Sequence[Project],
+) -> dict[str, set[str]]:
+    """Fuzzy-map project UUIDs → conversation ids in the audited corpus.
+
+    Claude.ai exports don't carry ``project_uuid`` on conversations
+    directly (per CLAUDE.md), so attribution is fuzzy: a project is
+    considered "represented" in the corpus if any conversation's title
+    or summary contains the project name (case-insensitive). Claude Code
+    conversations have no project-UUID association at all — they always
+    return empty here.
+
+    Result is a dict keyed by project UUID. Absent keys mean the project
+    has no conversations in the corpus (i.e. memories scoped to it are
+    out-of-scope for this audit).
+    """
+    attribution: dict[str, set[str]] = {}
+    for project in projects:
+        name_lower = project.name.lower().strip()
+        if not name_lower:
+            continue
+        matched_convs: set[str] = set()
+        for conv_id, conv in corpus.conversations.items():
+            haystack_parts: list[str] = []
+            if conv.title:
+                haystack_parts.append(conv.title.lower())
+            if conv.summary:
+                haystack_parts.append(conv.summary.lower())
+            haystack = " \n ".join(haystack_parts)
+            if not haystack:
+                continue
+            if name_lower in haystack:
+                matched_convs.add(conv_id)
+        if matched_convs:
+            attribution[project.uuid] = matched_convs
+    return attribution
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Finding construction + sub-claim rollup
 # ──────────────────────────────────────────────────────────────────────────
@@ -563,35 +613,123 @@ class ModuleHMemory:
             _LOGGER.info("Module H: no memory text present in store; skipping run.")
             return []
 
-        corpus_chunks = _corpus_chunks(corpus)
-        if not corpus_chunks:
-            return [
-                ModuleError(
-                    module=MODULE_NAME,
-                    conversation_id=None,
-                    error_type="empty_corpus",
-                    message=(
-                        "Module H has memory text but no user-assistant turn "
-                        "pairs in the corpus; verification cannot proceed."
-                    ),
-                )
-            ]
-
+        # Source-aware retrieval: project-scoped memories are verifiable
+        # only when the audited corpus contains conversations from that
+        # project. Otherwise the audit can't actually evaluate the claims
+        # — trying to verify a project-X memory against a corpus made of
+        # project-Y conversations produces spurious "unsupported" /
+        # "contradicted" findings. We mark those out-of-scope instead.
         try:
-            index = await self._index_corpus(corpus_chunks)
-        except Exception as exc:
-            return [
-                ModuleError(
-                    module=MODULE_NAME,
-                    conversation_id=None,
-                    error_type=f"index:{type(exc).__name__}",
-                    message=str(exc)[:500],
-                )
-            ]
+            projects = self._store.fetch_all_projects()
+        except Exception:
+            projects = []
+        project_attribution = _build_project_attribution(corpus, projects)
+        _LOGGER.info(
+            "Module H: project attribution maps %d of %d projects "
+            "to audit-corpus conversations.",
+            len(project_attribution),
+            len(projects),
+        )
+
+        corpus_chunks = _corpus_chunks(corpus)
+        # Partition memory sources into in-scope (need real verification)
+        # and out-of-scope (emit OUT_OF_SCOPE after cheap extraction).
+        in_scope_pairs: list[tuple[str, str]] = []
+        out_of_scope_pairs: list[tuple[str, str]] = []
+        for memory_source, memory_chunk in memory_pairs:
+            project_uuid = _project_uuid_from_source(memory_source)
+            if project_uuid is None:
+                # conversations_memory (user-level) is always in-scope.
+                in_scope_pairs.append((memory_source, memory_chunk))
+                continue
+            if project_uuid in project_attribution:
+                in_scope_pairs.append((memory_source, memory_chunk))
+            else:
+                out_of_scope_pairs.append((memory_source, memory_chunk))
 
         results: list[ModuleResult] = []
 
-        for memory_source, memory_chunk in memory_pairs:
+        # Build the semantic index only when there is something to verify.
+        index: _Index | None = None
+        if in_scope_pairs:
+            if not corpus_chunks:
+                return [
+                    ModuleError(
+                        module=MODULE_NAME,
+                        conversation_id=None,
+                        error_type="empty_corpus",
+                        message=(
+                            "Module H has in-scope memory text but no "
+                            "user-assistant turn pairs in the corpus; "
+                            "verification cannot proceed."
+                        ),
+                    )
+                ]
+            try:
+                index = await self._index_corpus(corpus_chunks)
+            except Exception as exc:
+                return [
+                    ModuleError(
+                        module=MODULE_NAME,
+                        conversation_id=None,
+                        error_type=f"index:{type(exc).__name__}",
+                        message=str(exc)[:500],
+                    )
+                ]
+
+        # Process out-of-scope memories first (cheap: extract, emit
+        # OUT_OF_SCOPE, skip verify). These still get per-claim
+        # granularity so the report can show exactly what wasn't audited.
+        for memory_source, memory_chunk in out_of_scope_pairs:
+            try:
+                extraction = await self._call_extract(memory_chunk, memory_source)
+            except Exception as exc:
+                results.append(
+                    ModuleError(
+                        module=MODULE_NAME,
+                        conversation_id=None,
+                        error_type=f"extract:{type(exc).__name__}",
+                        message=str(exc)[:500],
+                    )
+                )
+                continue
+            project_uuid = _project_uuid_from_source(memory_source) or "?"
+            reason = (
+                f"Memory belongs to project {project_uuid}, which has no "
+                "conversations in this audit sample. The claim is not "
+                "invalid — it simply cannot be verified against the "
+                "audited corpus."
+            )
+            for claim in extraction.claims:
+                try:
+                    results.append(
+                        _finding_for_claim(
+                            claim=claim,
+                            memory_source=memory_source,
+                            classification=MemorySupport.OUT_OF_SCOPE,
+                            confidence=1.0,
+                            evidence_quotes=[],
+                            reasoning=reason,
+                            top_similarity=0.0,
+                            excerpts=[],
+                            sub_claim_details=[],
+                            audit_run_id=corpus.audit_run_id,
+                            prompt_hash=self._classify_prompt.body_hash,
+                            detected_at=detected_at,
+                        )
+                    )
+                except Exception as exc:
+                    results.append(
+                        ModuleError(
+                            module=MODULE_NAME,
+                            conversation_id=None,
+                            error_type=f"finding_build:{type(exc).__name__}",
+                            message=str(exc)[:500],
+                        )
+                    )
+
+        # Now process in-scope memories the expensive way.
+        for memory_source, memory_chunk in in_scope_pairs:
             try:
                 extraction = await self._call_extract(memory_chunk, memory_source)
             except Exception as exc:
@@ -608,6 +746,9 @@ class ModuleHMemory:
             if not extraction.claims:
                 continue
 
+            # index is guaranteed non-None when in_scope_pairs is non-empty
+            # (we built it above or returned an error earlier).
+            assert index is not None
             claim_results = await asyncio.gather(
                 *(
                     self._verify_claim(
@@ -684,7 +825,7 @@ class ModuleHMemory:
         content = await self._call_with_retry(
             self._opus,
             model=MODEL_OPUS,
-            system_text=self._extract_prompt.body,
+            system_text=self._extract_prompt.padded_body,
             user_text=_render_extract_request(memory_text, source),
             max_tokens=MAX_EXTRACT_OUTPUT_TOKENS,
         )
@@ -922,7 +1063,7 @@ class ModuleHMemory:
         content = await self._call_with_retry(
             self._opus,
             model=MODEL_OPUS,
-            system_text=self._classify_prompt.body,
+            system_text=self._classify_prompt.padded_body,
             user_text=_render_classify_request(inp),
             max_tokens=MAX_CLASSIFY_OUTPUT_TOKENS,
         )
@@ -938,7 +1079,7 @@ class ModuleHMemory:
         content = await self._call_with_retry(
             self._sonnet,
             model=MODEL_SONNET,
-            system_text=self._refine_prompt.body,
+            system_text=self._refine_prompt.padded_body,
             user_text=_render_refine_request(
                 claim,
                 first_pass_top_sim=first_pass_top_sim,

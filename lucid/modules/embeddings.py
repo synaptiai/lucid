@@ -218,6 +218,45 @@ def batch_texts(
 # ──────────────────────────────────────────────────────────────────────────
 
 
+def _voyage_transient_exceptions() -> tuple[type[BaseException], ...]:
+    """Return the exception classes worth retrying on a Voyage call.
+
+    Always includes the asyncio / stdlib transport classes
+    (:class:`asyncio.TimeoutError`, builtin :class:`TimeoutError`,
+    :class:`ConnectionError`). When ``voyageai.error`` is importable
+    we additionally include Voyage's RateLimitError, ServerError,
+    ServiceUnavailableError, APIConnectionError, Timeout, and
+    TryAgain — every transient signal Voyage emits, but never
+    AuthenticationError / InvalidRequestError / MalformedRequestError
+    (those are configuration bugs that retrying would only delay).
+
+    Built lazily so a test environment without ``voyageai`` installed
+    still gets the stdlib classes and so import-time errors in
+    voyageai don't kill the rest of Module H.
+    """
+    transient: list[type[BaseException]] = [
+        asyncio.TimeoutError,
+        TimeoutError,
+        ConnectionError,
+    ]
+    try:
+        from voyageai import error as voyage_error
+    except Exception:
+        return tuple(transient)
+    for name in (
+        "RateLimitError",
+        "ServerError",
+        "ServiceUnavailableError",
+        "APIConnectionError",
+        "Timeout",
+        "TryAgain",
+    ):
+        cls = getattr(voyage_error, name, None)
+        if isinstance(cls, type) and issubclass(cls, BaseException):
+            transient.append(cls)
+    return tuple(transient)
+
+
 class VoyageEmbeddingProvider:
     """``EmbeddingProvider`` backed by the async Voyage AI client.
 
@@ -307,23 +346,25 @@ class VoyageEmbeddingProvider:
         *,
         input_type: InputType,
     ) -> EmbeddingBatchResult:
-        """One Voyage API call with tenacity retry on transient errors."""
-        transient: tuple[type[BaseException], ...] = (
-            asyncio.TimeoutError,
-            TimeoutError,
-            ConnectionError,
-        )
-        # voyageai doesn't expose a stable error hierarchy; catching
-        # broad Exception would swallow programmer errors, so we limit
-        # to the transport-shaped classes above. If Voyage raises a
-        # rate-limit error we don't currently special-case it — let the
-        # default AsyncRetrying schedule back off and the next attempt
-        # will resubmit.
+        """One Voyage API call with tenacity retry on transient errors.
 
+        Retries cover both transport failures (timeouts, connection
+        drops) and Voyage server-side throttling
+        (:class:`voyageai.error.RateLimitError`,
+        :class:`~ServerError`, :class:`~ServiceUnavailableError`).
+        Permanent failures (auth, malformed request) propagate
+        immediately so misconfiguration surfaces in the first audit
+        rather than after six futile retries.
+
+        Six attempts with exponential backoff up to 90s gives the
+        free Voyage tier (3 RPM) room to recover between calls — at
+        the worst case (~20s wait + 90s cap) we cover a full
+        rate-limit window without giving up.
+        """
         async for attempt in AsyncRetrying(
-            stop=stop_after_attempt(4),
-            wait=wait_random_exponential(multiplier=1, max=60),
-            retry=retry_if_exception_type(transient),
+            stop=stop_after_attempt(6),
+            wait=wait_random_exponential(multiplier=1, max=90),
+            retry=retry_if_exception_type(_voyage_transient_exceptions()),
             reraise=True,
         ):
             with attempt:

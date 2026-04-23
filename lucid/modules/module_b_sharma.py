@@ -107,7 +107,7 @@ CITATION_SHARMA_2023 = (
 MODULE_NAME = ModuleName.B_SHARMA
 EXTRACT_PROMPT_VERSION = "extract_v1"
 FEEDBACK_PROMPT_VERSION = "feedback_v1"
-ANSWER_PROMPT_VERSION = "answer_v1"
+ANSWER_PROMPT_VERSION = "answer_v2"
 MIMICRY_PROMPT_VERSION = "mimicry_v0"
 ARE_YOU_SURE_PROMPT_VERSION = "are_you_sure_v0"
 MODEL_OPUS = "claude-opus-4-7"
@@ -890,7 +890,7 @@ class ModuleBSharma:
         content = await self._call_with_retry(
             self._sonnet,
             model=MODEL_SONNET,
-            system_text=self._extract_prompt.body,
+            system_text=self._extract_prompt.padded_body,
             user_text=_render_conversation(turns),
             max_tokens=MAX_EXTRACT_OUTPUT_TOKENS,
         )
@@ -900,7 +900,7 @@ class ModuleBSharma:
         content = await self._call_with_retry(
             self._opus,
             model=MODEL_OPUS,
-            system_text=self._feedback_prompt.body,
+            system_text=self._feedback_prompt.padded_body,
             user_text=_render_feedback_pair(pair),
             max_tokens=MAX_FEEDBACK_OUTPUT_TOKENS,
         )
@@ -910,7 +910,7 @@ class ModuleBSharma:
         content = await self._call_with_retry(
             self._opus,
             model=MODEL_OPUS,
-            system_text=self._answer_prompt.body,
+            system_text=self._answer_prompt.padded_body,
             user_text=_render_answer_triple(triple),
             max_tokens=MAX_ANSWER_OUTPUT_TOKENS,
         )

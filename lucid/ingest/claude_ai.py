@@ -30,6 +30,7 @@ from typing import Any
 
 import ijson
 
+from lucid.ingest._rendering import plaintext_of_blocks as _plaintext_of
 from lucid.ingest.base import (
     MAX_BLOCKS_PER_TURN,
     MAX_EXPORT_FILE_SIZE,
@@ -147,9 +148,6 @@ def _role_from_sender(sender: object) -> Role | None:
     return None
 
 
-def _plaintext_of(blocks: list[ContentBlock]) -> str:
-    pieces = [b.text for b in blocks if isinstance(b, TextBlock)]
-    return "\n".join(pieces)
 
 
 def _parse_one_conversation(raw: dict[str, Any]) -> ParsedConversation | None:

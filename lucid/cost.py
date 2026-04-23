@@ -218,22 +218,25 @@ def heuristic_counter(model: str, turns: list[Turn]) -> int:
 def _turns_to_messages(turns: list[Turn]) -> list[dict[str, str]]:
     """Flatten turns to the Messages-API shape count_tokens expects.
 
-    Empty-content turns (tool-result-only, system-only) are skipped — the
-    API rejects `{"role": "user", "content": ""}` with a 400. When every
-    turn is empty, we synthesize one placeholder message so count_tokens
-    still returns a meaningful estimate instead of raising.
+    Two real-world quirks the API enforces, both surfaced by 400s on live runs:
+    1. `{"role": "user", "content": ""}` is rejected — skip empty turns.
+       When every turn is empty, synthesize one placeholder so count_tokens
+       still returns a meaningful estimate instead of raising.
+    2. The final assistant message cannot end with trailing whitespace
+       (`messages: final assistant content cannot end with trailing whitespace`).
+       Strip per-message; if stripping makes a message empty, drop it.
     """
     out: list[dict[str, str]] = []
     last_role: str | None = None
     for t in turns:
-        content = t.content
+        content = t.content.strip() if t.content else ""
         if not content:
             continue
         role = "assistant" if t.role == Role.ASSISTANT else "user"
         if role == last_role and out:
             # Messages API collapses consecutive same-role turns; we follow
             # suit to keep the count faithful.
-            out[-1]["content"] += "\n" + content
+            out[-1]["content"] = (out[-1]["content"] + "\n" + content).strip()
         else:
             out.append({"role": role, "content": content})
             last_role = role

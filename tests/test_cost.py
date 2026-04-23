@@ -12,6 +12,7 @@ from lucid.cost import (
     MODULE_PROFILES,
     PRICES,
     CostEstimator,
+    _turns_to_messages,
     heuristic_counter,
 )
 from lucid.schemas import Conversation, ModuleName, Role, Source, TextBlock, Turn
@@ -118,3 +119,74 @@ def test_cached_input_tokens_never_exceed_input_tokens() -> None:
     est = CostEstimator().estimate(convs=[conv], turns_by_conv={conv.id: turns})
     for mc in est.per_module:
         assert mc.cached_input_tokens <= mc.input_tokens
+
+
+def test_turns_to_messages_strips_trailing_whitespace() -> None:
+    """Regression: count_tokens 400s on 'final assistant content cannot end with
+    trailing whitespace'. Every emitted message must be stripped."""
+    turns = [
+        Turn(
+            id="t-0",
+            conversation_id="c",
+            index=0,
+            role=Role.USER,
+            content="hello   \n",
+            blocks=[TextBlock(text="hello")],
+        ),
+        Turn(
+            id="t-1",
+            conversation_id="c",
+            index=1,
+            role=Role.ASSISTANT,
+            content="hi back\n\n   ",
+            blocks=[TextBlock(text="hi back")],
+        ),
+    ]
+    messages = _turns_to_messages(turns)
+    for msg in messages:
+        assert msg["content"] == msg["content"].strip(), (
+            f"trailing whitespace leaked: {msg!r}"
+        )
+    assert messages[-1]["content"] == "hi back"
+
+
+def test_turns_to_messages_skips_whitespace_only_turns() -> None:
+    """A turn that's only whitespace must not produce an empty content message."""
+    turns = [
+        Turn(
+            id="t-0",
+            conversation_id="c",
+            index=0,
+            role=Role.USER,
+            content="   \n\t  ",
+            blocks=[TextBlock(text="")],
+        ),
+    ]
+    messages = _turns_to_messages(turns)
+    assert messages == [{"role": "user", "content": "(empty conversation)"}]
+
+
+def test_turns_to_messages_collapses_consecutive_same_role_without_trailing_ws() -> None:
+    """Consecutive same-role turns get joined; the join must not introduce
+    trailing whitespace either."""
+    turns = [
+        Turn(
+            id="t-0",
+            conversation_id="c",
+            index=0,
+            role=Role.ASSISTANT,
+            content="part one",
+            blocks=[TextBlock(text="part one")],
+        ),
+        Turn(
+            id="t-1",
+            conversation_id="c",
+            index=1,
+            role=Role.ASSISTANT,
+            content="part two   ",
+            blocks=[TextBlock(text="part two")],
+        ),
+    ]
+    messages = _turns_to_messages(turns)
+    assert len(messages) == 1
+    assert messages[0]["content"] == "part one\npart two"

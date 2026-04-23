@@ -52,8 +52,8 @@ from lucid.orchestrator.managed_agent import (
     OrchestratorConfig,
     SessionOutcome,
 )
-from lucid.orchestrator.tools import build_tool_registry, run_attribution_safety_net
-from lucid.report.generator import write_report
+from lucid.orchestrator.tools import ToolRegistry, build_tool_registry, run_attribution_safety_net
+from lucid.report.generator import write_deck, write_report
 from lucid.schemas import (
     AuditRun,
     AuditStatus,
@@ -313,6 +313,15 @@ def _render_report_or_log(
         progress_log("ERROR", f"report render failed: {err}")
         return None
     progress_log("INFO", f"Report written: {path}")
+    # Hackathon demo deck — same data, slide-form companion to the
+    # report. A failure here must not bury the report path the user
+    # already has, so it logs and continues.
+    try:
+        deck_path = write_deck(audit_run, findings, output_dir=output_dir)
+        progress_log("INFO", f"Deck written: {deck_path}")
+    except Exception as err:  # pragma: no cover — logged for operator triage
+        _LOGGER.exception("deck render failed")
+        progress_log("WARN", f"deck render failed (report still written): {err}")
     return path
 
 
@@ -440,8 +449,18 @@ def run_audit(
                     store=store,
                     audit_run_id=resolved_run_id,
                     sampled_ids=sampled_ids,
+                    enabled_modules=inputs.enabled_modules,
                     progress_log=progress_log,
                 )
+            )
+
+            # Finalize the audit_run row BEFORE rendering: the report
+            # reads status + completed_at from this row, and rendering
+            # first would bake in the stale ``running`` state. The
+            # findings are already persisted; updating status is just
+            # a metadata flip.
+            _update_audit_run_status(
+                store, resolved_run_id, status, completed=(status == "completed")
             )
 
             report_path = _render_report_or_log(
@@ -451,9 +470,6 @@ def run_audit(
                 progress_log=progress_log,
             )
 
-            _update_audit_run_status(
-                store, resolved_run_id, status, completed=(status == "completed")
-            )
             findings_written = _count_findings(store, resolved_run_id)
 
         return AuditResult(
@@ -476,15 +492,29 @@ async def _execute_session_and_safety_net(
     store: CorpusStore,
     audit_run_id: str,
     sampled_ids: list[str],
+    enabled_modules: list[ModuleName],
     progress_log: Callable[[str, str], None],
 ) -> tuple[SessionOutcome | None, AuditStatus, str]:
-    """Drive the orchestrator session, then the Module G safety net.
+    """Drive the orchestrator session, then backfill + safety net.
 
-    Both phases share one event loop — the SDK's background HTTP
-    cleanup tasks live inside that loop and would be silently
-    destroyed if a fresh ``asyncio.run`` were spun up for the safety
-    net. The safety net always runs (even on a session exception) so
-    the report has attribution rows for whatever findings did persist.
+    Three phases share one event loop:
+
+    1. **Managed Agents session** (best-effort). Sonnet 4.6 sometimes
+       produces a short response after ``query_corpus`` and goes
+       idle without invoking any behaviour module. We treat the
+       session as informational; the actual finding-production
+       contract belongs to the next two phases.
+    2. **Direct-invocation backfill.** Any enabled module without a
+       ``module_progress`` row is invoked via the registry's
+       ``invoke_module`` handler. Reuses the same dispatcher path
+       as the session so spend-tracking, persistence, and progress
+       writes stay consistent.
+    3. **Module G safety net.** Always runs — deterministic
+       attribution is idempotent and cheap.
+
+    A single event loop keeps SDK background HTTP cleanup tasks
+    alive across phases (consolidating two ``asyncio.run`` calls
+    fixed an SDK-task-destruction race in the earlier diff).
     """
     outcome: SessionOutcome | None = None
     status: AuditStatus
@@ -504,6 +534,19 @@ async def _execute_session_and_safety_net(
             reason = outcome.reason or "partial"
 
     try:
+        await _backfill_unfinished_modules(
+            store=store,
+            registry=session.registry,
+            audit_run_id=audit_run_id,
+            enabled_modules=enabled_modules,
+            sampled_ids=sampled_ids,
+            progress_log=progress_log,
+        )
+    except Exception as err:  # pragma: no cover — logged + safety net still runs
+        _LOGGER.exception("post-session backfill failed")
+        progress_log("ERROR", f"post-session backfill failed: {err}")
+
+    try:
         await _attribution_safety_net(
             store=store,
             run_id=audit_run_id,
@@ -518,6 +561,49 @@ async def _execute_session_and_safety_net(
         progress_log("ERROR", f"post-run Module G safety net failed: {err}")
 
     return outcome, status, reason
+
+
+async def _backfill_unfinished_modules(
+    *,
+    store: CorpusStore,
+    registry: ToolRegistry,
+    audit_run_id: str,
+    enabled_modules: list[ModuleName],
+    sampled_ids: list[str],
+    progress_log: Callable[[str, str], None],
+) -> None:
+    """Invoke any enabled module the orchestrator skipped.
+
+    Module G is excluded — the dedicated safety net runs it
+    unconditionally. The check is on ``module_progress`` rather than
+    findings: a module that ran but produced zero findings is still
+    "done" and should not be retried.
+
+    Uses the registry's own ``invoke_module`` handler so spend
+    debits, ``module_progress`` writes, and finding persistence
+    follow the same path the orchestrator would have taken.
+    """
+    if not sampled_ids:
+        return
+    invoke_handler = registry.get("invoke_module")
+    if invoke_handler is None:  # pragma: no cover — registry always has it
+        return
+    seen = {p.module for p in store.fetch_module_progress(audit_run_id)}
+    pending = [m for m in enabled_modules if m is not ModuleName.G_ATTRIBUTION and m not in seen]
+    if not pending:
+        return
+    progress_log(
+        "INFO",
+        f"Orchestrator did not invoke {len(pending)} module(s); "
+        f"backfilling directly: {', '.join(m.value for m in pending)}",
+    )
+    for module in pending:
+        await invoke_handler.handler(
+            {
+                "module": module.value,
+                "conversation_ids": sampled_ids,
+            }
+        )
 
 
 async def _default_session_runner(session: ManagedAgentsSession, kickoff: str) -> SessionOutcome:

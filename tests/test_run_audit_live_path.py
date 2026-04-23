@@ -517,6 +517,80 @@ def _all_findings(db_path: Path, run_id: str) -> list[dict[str, Any]]:
         ]
 
 
+def test_run_audit_backfills_modules_the_orchestrator_skipped(tmp_path: Path) -> None:
+    """The orchestrator (Sonnet 4.6) sometimes stops after one or two
+    tool calls without running the enabled behaviour modules. The
+    backfill must then invoke every enabled (non-G) module that has
+    no ``module_progress`` row, producing findings even when the
+    session did nothing.
+
+    Maps directly to the live-run gap surfaced on 2026-04-22:
+    enabled_modules=[A] + orchestrator that only calls query_corpus
+    → backfill runs Module A → A finding persists.
+    """
+    conv, turns = _build_conversation("c-backfill")
+    sampled = [conv]
+    inputs = _build_inputs(sampled, {conv.id: turns})
+
+    # Stream that opens, goes idle — orchestrator does no module work.
+    sync_client = _FakeSyncClient([{"type": "session.status_idle"}])
+    async_client = _module_a_async_client(_spiral_score_one_pushback())
+
+    result = run_audit(
+        inputs=inputs,
+        data_dir=tmp_path / ".lucid",
+        client=sync_client,
+        async_client=async_client,
+        system_prompt=SYSTEM_PROMPT,
+        kickoff_message=_minimal_kickoff(inputs),
+        prompt_versions={ModuleName.A_SPIRALBENCH: "v1", ModuleName.G_ATTRIBUTION: "v1"},
+        report_dir=tmp_path / "report",
+    )
+
+    assert result.status == "completed"
+    db_path = tmp_path / ".lucid" / "lucid.sqlite3"
+    modules = {row["module"] for row in _all_findings(db_path, result.run_id)}
+    # Module A backfilled + Module G via safety net.
+    assert "A" in modules, modules
+    assert "G" in modules, modules
+    # Async client was called by the backfill — Module A really ran.
+    assert async_client.messages.create.await_count >= 1
+
+
+def test_run_audit_backfill_is_a_noop_when_orchestrator_already_ran_module(
+    tmp_path: Path,
+) -> None:
+    """If the orchestrator already invoked a module (and the
+    dispatcher wrote a ``module_progress`` row), the backfill must
+    not re-invoke it — that would waste spend and risk duplicate-key
+    errors."""
+    conv, turns = _build_conversation("c-no-backfill")
+    sampled = [conv]
+    inputs = _build_inputs(sampled, {conv.id: turns})
+
+    # Stream emits an invoke_module(A) tool call, the dispatcher runs
+    # it and writes a 'completed' row. The backfill should then skip
+    # A entirely — async client must only be called once.
+    sync_client = _FakeSyncClient(_events_query_then_invoke_a_then_idle(conv.id))
+    async_client = _module_a_async_client(_spiral_score_one_pushback())
+
+    result = run_audit(
+        inputs=inputs,
+        data_dir=tmp_path / ".lucid",
+        client=sync_client,
+        async_client=async_client,
+        system_prompt=SYSTEM_PROMPT,
+        kickoff_message=_minimal_kickoff(inputs),
+        prompt_versions={ModuleName.A_SPIRALBENCH: "v1", ModuleName.G_ATTRIBUTION: "v1"},
+        report_dir=tmp_path / "report",
+    )
+
+    assert result.status == "completed"
+    # Exactly one messages.create call — backfill saw the existing
+    # completed row and skipped, not a second invocation.
+    assert async_client.messages.create.await_count == 1
+
+
 def test_run_audit_safety_net_failure_is_logged_but_does_not_abort(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

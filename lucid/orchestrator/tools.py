@@ -835,8 +835,17 @@ def build_tool_registry(
         CustomTool(
             name="invoke_module",
             description=(
-                "Run a detection module over a list of conversations. "
-                "Currently a stub — wired in Phase 7 when modules ship."
+                "Run a Lucid detection module (A, B, C, D, E, F, G, H) over the "
+                "supplied conversation_ids. The module fans out internally with "
+                "bounded concurrency and persists every Finding it produces — "
+                "the response carries `findings_stored` so you do NOT need to "
+                "call `store_finding` afterwards. Pass every sampled "
+                "conversation id in one call per module; do not call once per "
+                "conversation. Modules return `status='completed'` on success "
+                "or one of `skipped` / `no_client` / `no_embedding_provider` "
+                "when a precondition is missing — log the latter and continue. "
+                "This is the primary tool for actually running the audit; "
+                "calling query_corpus alone does not produce findings."
             ),
             input_schema={
                 "type": "object",
@@ -883,8 +892,13 @@ def build_tool_registry(
         CustomTool(
             name="store_finding",
             description=(
-                "Persist a Finding to the audit DB. Idempotency key "
-                "(audit_run_id, module, conversation_id, turn_ids_hash, behavior) "
+                "RESERVED — do not call in the default workflow. Findings are "
+                "persisted automatically inside `invoke_module`; calling "
+                "`store_finding` after `invoke_module` causes duplicate-key "
+                "errors against the (audit_run_id, module, conversation_id, "
+                "turn_ids_hash, behavior) idempotency tuple. The tool stays "
+                "registered for out-of-band synthesis only (e.g. a derived "
+                "finding combining multiple module outputs). Idempotency key "
                 "is enforced at the DB level; duplicate submissions return "
                 "error='integrity_error'."
             ),

@@ -244,6 +244,123 @@ def test_voyage_provider_accepts_explicit_api_key(monkeypatch: Any) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Voyage retry / backoff (rate-limit handling)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_voyage_transient_exceptions_includes_voyage_rate_limit() -> None:
+    """``_voyage_transient_exceptions`` must surface every transient
+    Voyage error class. Without RateLimitError in the set, a 429
+    propagates immediately and Module H halts mid-audit (this is
+    exactly what the 2026-04-22 live run hit on the free tier)."""
+    from voyageai import error as voyage_error
+
+    from lucid.modules.embeddings import _voyage_transient_exceptions
+
+    transient = _voyage_transient_exceptions()
+    assert voyage_error.RateLimitError in transient
+    assert voyage_error.ServerError in transient
+    assert voyage_error.ServiceUnavailableError in transient
+    # Stdlib transport classes always present.
+    assert ConnectionError in transient
+    assert TimeoutError in transient
+
+
+def test_voyage_transient_exceptions_excludes_permanent_errors() -> None:
+    """Auth / malformed-request errors are configuration bugs.
+    Retrying them just delays the inevitable failure and burns the
+    free-tier rate budget; they must propagate immediately."""
+    from voyageai import error as voyage_error
+
+    from lucid.modules.embeddings import _voyage_transient_exceptions
+
+    transient = _voyage_transient_exceptions()
+    assert voyage_error.AuthenticationError not in transient
+    assert voyage_error.MalformedRequestError not in transient
+    assert voyage_error.InvalidRequestError not in transient
+
+
+async def test_voyage_provider_retries_on_rate_limit_then_succeeds(
+    monkeypatch: Any,
+) -> None:
+    """A Voyage 429 followed by success returns the eventual vectors —
+    the audit completes instead of leaving a Module H gap.
+
+    Patches ``wait_random_exponential`` to a 0-second wait so the
+    test runs fast (the production wait of up to 90s is what protects
+    a real free-tier client; the retry contract itself is what we're
+    asserting here)."""
+    from voyageai import error as voyage_error
+
+    from lucid.modules import embeddings as embeddings_module
+
+    monkeypatch.setattr(embeddings_module, "wait_random_exponential", lambda **_: lambda _x: 0)
+
+    fake_client = MagicMock()
+    rate_limit_then_success = [
+        voyage_error.RateLimitError("simulated 429"),
+        _make_voyage_response([[0.5] * VOYAGE_DIM], total_tokens=7),
+    ]
+
+    async def _serve(*_args: Any, **_kwargs: Any) -> Any:
+        item = rate_limit_then_success.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    fake_client.embed = AsyncMock(side_effect=_serve)
+    provider = VoyageEmbeddingProvider(client=fake_client)
+
+    result = await provider.embed_batch(["payload"], input_type="document")
+
+    assert result.vectors.shape == (1, VOYAGE_DIM)
+    assert result.input_tokens == 7
+    # First call hit the 429, second call succeeded.
+    assert fake_client.embed.await_count == 2
+
+
+async def test_voyage_provider_does_not_retry_on_authentication_error(
+    monkeypatch: Any,
+) -> None:
+    """An AuthenticationError is permanent — retrying just burns
+    rate-limit budget without changing the outcome. The error must
+    surface on the first attempt."""
+    from voyageai import error as voyage_error
+
+    from lucid.modules import embeddings as embeddings_module
+
+    monkeypatch.setattr(embeddings_module, "wait_random_exponential", lambda **_: lambda _x: 0)
+
+    fake_client = MagicMock()
+    fake_client.embed = AsyncMock(side_effect=voyage_error.AuthenticationError("bad key"))
+    provider = VoyageEmbeddingProvider(client=fake_client)
+
+    with pytest.raises(voyage_error.AuthenticationError, match="bad key"):
+        await provider.embed_batch(["payload"], input_type="document")
+    assert fake_client.embed.await_count == 1
+
+
+async def test_voyage_provider_gives_up_after_max_attempts(monkeypatch: Any) -> None:
+    """Persistent rate limiting (no payment method, every call 429s)
+    eventually raises so the audit can mark Module H partial. The
+    cap matches the production ``stop_after_attempt`` value."""
+    from voyageai import error as voyage_error
+
+    from lucid.modules import embeddings as embeddings_module
+
+    monkeypatch.setattr(embeddings_module, "wait_random_exponential", lambda **_: lambda _x: 0)
+
+    fake_client = MagicMock()
+    fake_client.embed = AsyncMock(side_effect=voyage_error.RateLimitError("always 429"))
+    provider = VoyageEmbeddingProvider(client=fake_client)
+
+    with pytest.raises(voyage_error.RateLimitError):
+        await provider.embed_batch(["payload"], input_type="document")
+    # Production cap is 6 attempts (stop_after_attempt(6)).
+    assert fake_client.embed.await_count == 6
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Cosine similarity + top_k
 # ──────────────────────────────────────────────────────────────────────────
 

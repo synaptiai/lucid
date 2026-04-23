@@ -401,6 +401,33 @@ class CorpusStore:
         )
         self._commit()
 
+    def fetch_all_projects(self) -> list[Project]:
+        """Load every ingested :class:`Project` row.
+
+        Module H uses the name + UUID to fuzzy-match audit conversations
+        back onto projects (conversations don't carry ``project_uuid``
+        directly in Claude.ai exports; see ``module_h_memory.py``).
+        """
+        rows = self.fetchall(
+            "SELECT uuid, name, description, prompt_template, created_at, "
+            "updated_at, doc_count, doc_char_total FROM projects",
+        )
+        out: list[Project] = []
+        for row in rows:
+            out.append(
+                Project(
+                    uuid=row["uuid"],
+                    name=row["name"],
+                    description=row["description"],
+                    prompt_template=row["prompt_template"],
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                    updated_at=datetime.fromisoformat(row["updated_at"]),
+                    doc_count=int(row["doc_count"]),
+                    doc_char_total=int(row["doc_char_total"]),
+                )
+            )
+        return out
+
     def insert_memory_file(self, mf: MemoryFile) -> None:
         self.connect().execute(
             """

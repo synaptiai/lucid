@@ -240,6 +240,16 @@ class ManagedAgentsSession:
                         event.get("id") if isinstance(event, dict) else None
                     )
 
+                    # Log every tool call so post-mortem debugging can see
+                    # what the orchestrator actually did. INFO level so the
+                    # CLI's progress callback can route it to the user
+                    # without a --log-level DEBUG flip.
+                    _LOGGER.info(
+                        "tool_call #%d: %s(%s)",
+                        outcome.tool_calls,
+                        tool_name,
+                        _summarize_args(dict(tool_args or {})),
+                    )
                     result = await dispatch_tool_call(
                         self.registry,
                         name=str(tool_name),
@@ -327,6 +337,24 @@ class ManagedAgentsSession:
 # ──────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────
+
+
+def _summarize_args(args: dict[str, Any]) -> str:
+    """Render tool-call arguments as a short, log-safe one-liner.
+
+    Truncates long lists / strings and intentionally omits any raw
+    user-conversation content (only argument *shapes* — keys + small
+    primitives — reach the log).
+    """
+    parts: list[str] = []
+    for key, value in args.items():
+        if isinstance(value, list):
+            parts.append(f"{key}=[{len(value)} ids]")
+        elif isinstance(value, str) and len(value) > 60:
+            parts.append(f"{key}={value[:60]!r}...")
+        else:
+            parts.append(f"{key}={value!r}")
+    return ", ".join(parts)
 
 
 async def _shutdown_watchdog(watchdog: asyncio.Task[None] | None) -> None:
