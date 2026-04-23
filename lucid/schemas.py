@@ -331,3 +331,31 @@ class AuditRun(BaseModel):
     prompt_versions: dict[ModuleName, str] = Field(default_factory=dict)
     schema_version: int = Field(ge=1)
     skipped_modules: list[ModuleName] = Field(default_factory=list)
+
+
+class ReportSection(BaseModel):
+    """One agent-written section of the HTML report.
+
+    Populated by the synthesis phase; read by the report renderer.
+    ``markdown`` contains inline ``[F:finding_id]`` / ``[T:turn_id]``
+    citation tokens that the renderer resolves to hover-links. Every
+    id in ``cited_finding_ids`` / ``cited_turn_ids`` MUST exist in the
+    run's findings/turns tables — the synthesis validator enforces this
+    before the row lands here.
+
+    When ``insufficient_evidence`` is True, the agent declined the
+    section. ``markdown`` is empty, citation lists are empty, and
+    ``decline_reason`` carries a human-readable explanation. The template
+    renders "Section skipped: <decline_reason>" instead of prose.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    audit_run_id: str = Field(min_length=1)
+    section_id: str = Field(min_length=1, max_length=64)
+    markdown: str = Field(default="")
+    cited_finding_ids: list[str] = Field(default_factory=list)
+    cited_turn_ids: list[str] = Field(default_factory=list)
+    insufficient_evidence: bool = False
+    decline_reason: str | None = None
+    created_at: datetime

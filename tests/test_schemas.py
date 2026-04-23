@@ -26,6 +26,7 @@ from lucid.schemas import (
     ModuleName,
     ModuleTokenUsage,
     Project,
+    ReportSection,
     Role,
     SamplingConfigRecord,
     Source,
@@ -315,3 +316,48 @@ def test_content_block_rejects_wrong_shape() -> None:
 def test_content_block_rejects_unknown_type() -> None:
     with pytest.raises(ValidationError):
         _BLOCK_ADAPTER.validate_python({"type": "image", "data": "..."})
+
+
+# ----- report section -----------------------------------------------
+
+
+def test_report_section_roundtrip() -> None:
+    section = ReportSection(
+        audit_run_id="run-abc123",
+        section_id="exec_summary",
+        markdown="Across [F:f001] findings, the corpus shows a pattern of pushback.",
+        cited_finding_ids=["f001", "f002"],
+        cited_turn_ids=["t001"],
+        insufficient_evidence=False,
+        created_at=datetime(2026, 4, 24, 10, 0, tzinfo=UTC),
+    )
+    roundtrip = ReportSection.model_validate_json(section.model_dump_json())
+    assert roundtrip == section
+
+
+def test_report_section_rejects_empty_section_id() -> None:
+    with pytest.raises(ValidationError):
+        ReportSection(
+            audit_run_id="run-abc",
+            section_id="",
+            markdown="x",
+            cited_finding_ids=[],
+            cited_turn_ids=[],
+            insufficient_evidence=False,
+            created_at=datetime.now(tz=UTC),
+        )
+
+
+def test_report_section_insufficient_evidence_allows_empty_prose() -> None:
+    """When the agent declines a section, markdown may be empty and citations may be empty."""
+    section = ReportSection(
+        audit_run_id="run-abc",
+        section_id="top_3_actions",
+        markdown="",
+        cited_finding_ids=[],
+        cited_turn_ids=[],
+        insufficient_evidence=True,
+        decline_reason="fewer than 5 qualifying findings",
+        created_at=datetime.now(tz=UTC),
+    )
+    assert section.insufficient_evidence is True
