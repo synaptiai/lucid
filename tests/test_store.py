@@ -506,3 +506,80 @@ def test_fetch_module_progress_returns_typed_models(tmp_path: Path) -> None:
     d_row = progress[1]
     assert d_row.status == "skipped"
     assert d_row.error_message == "opt-in absent"
+
+
+# ----- report_sections (synthesis-layer prose) ------------------------
+
+
+def test_report_sections_table_exists(tmp_path: Path) -> None:
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        rows = store.fetchall(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='report_sections'"
+        )
+        assert len(rows) == 1
+
+
+def test_report_sections_schema_columns(tmp_path: Path) -> None:
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        rows = store.fetchall("PRAGMA table_info(report_sections)")
+        columns = {row["name"] for row in rows}
+        expected = {
+            "id",
+            "audit_run_id",
+            "section_id",
+            "markdown",
+            "cited_finding_ids_json",
+            "cited_turn_ids_json",
+            "insufficient_evidence",
+            "decline_reason",
+            "created_at",
+        }
+        assert expected.issubset(columns)
+
+
+def test_report_sections_unique_key(tmp_path: Path) -> None:
+    """(audit_run_id, section_id) is unique — re-run overwrites, does not dup."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store, run_id="run-ut1")
+        conn = store.connect()
+        conn.execute(
+            "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
+            "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
+            "decline_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                "rs-1",
+                "run-ut1",
+                "exec_summary",
+                "x",
+                "[]",
+                "[]",
+                0,
+                None,
+                "2026-04-24T10:00:00+00:00",
+            ),
+        )
+        conn.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
+                "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
+                "decline_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    "rs-2",
+                    "run-ut1",
+                    "exec_summary",
+                    "y",
+                    "[]",
+                    "[]",
+                    0,
+                    None,
+                    "2026-04-24T10:01:00+00:00",
+                ),
+            )
+            conn.commit()

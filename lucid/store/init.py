@@ -25,7 +25,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_SQL_PATH = Path(__file__).with_name("schema.sql")
 MIGRATIONS_DIR: Path = Path(__file__).parent / "migrations"

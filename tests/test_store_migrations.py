@@ -54,9 +54,26 @@ def test_load_migrations_returns_empty_dict_when_directory_missing(tmp_path: Pat
 
 
 def _seed_v1_db(tmp_path: Path) -> Path:
-    """Bring a DB to ``user_version == 1`` using the production schema.sql."""
+    """Bring a DB to ``user_version == 1`` using the production schema.sql.
+
+    We apply the current :file:`schema.sql` and then pin
+    ``user_version = 1`` explicitly so the injected migrations_dir in
+    each test drives the v1 → v_simulated upgrade path. Pinning by
+    hand (rather than calling ``initialize_db``) keeps this fixture
+    stable across production ``SCHEMA_VERSION`` bumps — otherwise the
+    fixture silently lands at whatever the current version is and the
+    migration-replay tests stop exercising anything.
+    """
+    from lucid.store.init import _SCHEMA_SQL_PATH
+
     db = tmp_path / "old.sqlite3"
-    initialize_db(db)
+    conn = sqlite3.connect(db)
+    try:
+        conn.executescript(_SCHEMA_SQL_PATH.read_text(encoding="utf-8"))
+        conn.execute("PRAGMA user_version = 1;")
+        conn.commit()
+    finally:
+        conn.close()
     return db
 
 
