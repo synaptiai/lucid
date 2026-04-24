@@ -637,6 +637,250 @@ async def invoke_module_for_run(
     }
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Module-level handler factories (shared with synthesis registry)
+# ──────────────────────────────────────────────────────────────────────────
+#
+# Each factory returns a ``CustomTool`` whose handler closes over exactly the
+# dependencies the equivalent inline closure in :func:`build_tool_registry`
+# used to close over. Handler bodies are byte-identical to the closures —
+# these factories are a lift, not a rewrite. They exist so the synthesis
+# tool registry (see :mod:`lucid.synthesis.tools`) can reuse the same
+# read-only handlers without duplicating logic.
+
+
+def make_query_corpus_tool(store: CorpusStore) -> CustomTool:
+    """Build the ``query_corpus`` read-only tool."""
+
+    async def query_corpus(args: dict[str, Any]) -> dict[str, Any]:
+        source = args.get("source")
+        project_slug = args.get("project_slug")
+        limit = int(args.get("limit", 50))
+        where: list[str] = []
+        params: list[Any] = []
+        if isinstance(source, str):
+            where.append("source = ?")
+            params.append(source)
+        if isinstance(project_slug, str):
+            where.append("project_slug = ?")
+            params.append(project_slug)
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = store.fetchall(
+            f"SELECT id, source, title, turn_count, updated_at "
+            f"FROM conversations {clause} ORDER BY updated_at DESC LIMIT ?",
+            (*params, limit),
+        )
+        return {
+            "conversations": [
+                {
+                    "id": r["id"],
+                    "source": r["source"],
+                    "title": r["title"],
+                    "turn_count": r["turn_count"],
+                    "updated_at": r["updated_at"],
+                }
+                for r in rows
+            ],
+            "count": len(rows),
+        }
+
+    return CustomTool(
+        name="query_corpus",
+        description=(
+            "List conversations matching an optional source/project filter. "
+            "Returns id, title, turn_count, updated_at."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "enum": ["claude-code", "claude-ai"],
+                    "description": "Optional source filter.",
+                },
+                "project_slug": {
+                    "type": "string",
+                    "description": "Optional project slug filter (Claude Code only).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 50,
+                    "minimum": 1,
+                    "maximum": 1000,
+                },
+            },
+        },
+        handler=query_corpus,
+    )
+
+
+def make_get_conversation_tool(store: CorpusStore) -> CustomTool:
+    """Build the ``get_conversation`` read-only tool."""
+
+    async def get_conversation(args: dict[str, Any]) -> dict[str, Any]:
+        conv_id = args["conversation_id"]
+        rows = store.fetchall(
+            "SELECT id, source, source_path, created_at, updated_at, model, "
+            "title, summary, turn_count, project_slug "
+            "FROM conversations WHERE id = ?",
+            (conv_id,),
+        )
+        if not rows:
+            return {"error": "not_found", "conversation_id": conv_id}
+        row = rows[0]
+        return {
+            "id": row["id"],
+            "source": row["source"],
+            "source_path": row["source_path"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "model": row["model"],
+            "title": row["title"],
+            "summary": row["summary"],
+            "turn_count": row["turn_count"],
+            "project_slug": row["project_slug"],
+        }
+
+    return CustomTool(
+        name="get_conversation",
+        description="Fetch a single conversation's metadata by id.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "conversation_id": {"type": "string"},
+            },
+            "required": ["conversation_id"],
+        },
+        handler=get_conversation,
+    )
+
+
+def make_get_turn_window_tool(store: CorpusStore) -> CustomTool:
+    """Build the ``get_turn_window`` read-only tool."""
+
+    async def get_turn_window(args: dict[str, Any]) -> dict[str, Any]:
+        conv_id = args["conversation_id"]
+        start = int(args.get("start_index", 0))
+        count = int(args.get("count", 20))
+        rows = store.fetchall(
+            "SELECT id, turn_index, role, content, timestamp, parent_message_uuid "
+            "FROM turns WHERE conversation_id = ? AND turn_index >= ? "
+            "ORDER BY turn_index ASC LIMIT ?",
+            (conv_id, start, count),
+        )
+        return {
+            "conversation_id": conv_id,
+            "turns": [
+                {
+                    "id": r["id"],
+                    "index": r["turn_index"],
+                    "role": r["role"],
+                    "content": r["content"],
+                    "timestamp": r["timestamp"],
+                    "parent_message_uuid": r["parent_message_uuid"],
+                }
+                for r in rows
+            ],
+        }
+
+    return CustomTool(
+        name="get_turn_window",
+        description=(
+            "Fetch a contiguous window of turns from a conversation, "
+            "starting at `start_index` (default 0), up to `count` turns (default 20)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "conversation_id": {"type": "string"},
+                "start_index": {"type": "integer", "minimum": 0, "default": 0},
+                "count": {"type": "integer", "minimum": 1, "maximum": 200, "default": 20},
+            },
+            "required": ["conversation_id"],
+        },
+        handler=get_turn_window,
+    )
+
+
+def make_get_findings_tool(store: CorpusStore, audit_run_id: str) -> CustomTool:
+    """Build the ``get_findings`` read-only tool."""
+
+    async def get_findings(args: dict[str, Any]) -> dict[str, Any]:
+        module = args.get("module")
+        conversation_id = args.get("conversation_id")
+        where = ["audit_run_id = ?"]
+        params: list[Any] = [audit_run_id]
+        if isinstance(module, str):
+            where.append("module = ?")
+            params.append(module)
+        if isinstance(conversation_id, str):
+            where.append("conversation_id = ?")
+            params.append(conversation_id)
+        clause = " AND ".join(where)
+        rows = store.fetchall(
+            f"SELECT id, module, behavior, intensity, confidence "
+            f"FROM findings WHERE {clause} ORDER BY detected_at DESC LIMIT 500",
+            params,
+        )
+        return {
+            "findings": [
+                {
+                    "id": r["id"],
+                    "module": r["module"],
+                    "behavior": r["behavior"],
+                    "intensity": r["intensity"],
+                    "confidence": r["confidence"],
+                }
+                for r in rows
+            ],
+            "count": len(rows),
+        }
+
+    return CustomTool(
+        name="get_findings",
+        description="List findings for this audit run, optionally filtered by module or conversation.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "module": {"type": "string"},
+                "conversation_id": {"type": "string"},
+            },
+        },
+        handler=get_findings,
+    )
+
+
+def make_log_progress_tool(progress_log: Callable[[str, str], None]) -> CustomTool:
+    """Build the ``log_progress`` tool.
+
+    Closes over the caller-supplied ``progress_log(level, message)`` sink.
+    """
+
+    async def log_progress(args: dict[str, Any]) -> dict[str, Any]:
+        message = str(args.get("message") or "")
+        level = str(args.get("level") or "INFO").upper()
+        progress_log(level, message)
+        return {"ok": True}
+
+    return CustomTool(
+        name="log_progress",
+        description="Emit a user-visible progress line. Level is INFO/WARNING/ERROR.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "level": {
+                    "type": "string",
+                    "enum": ["DEBUG", "INFO", "WARNING", "ERROR"],
+                    "default": "INFO",
+                },
+            },
+            "required": ["message"],
+        },
+        handler=log_progress,
+    )
+
+
 def build_tool_registry(
     *,
     store: CorpusStore,
@@ -710,155 +954,12 @@ def build_tool_registry(
 
     registry = ToolRegistry()
 
-    # ---- query_corpus ---------------------------------------------
-    async def query_corpus(args: dict[str, Any]) -> dict[str, Any]:
-        source = args.get("source")
-        project_slug = args.get("project_slug")
-        limit = int(args.get("limit", 50))
-        where: list[str] = []
-        params: list[Any] = []
-        if isinstance(source, str):
-            where.append("source = ?")
-            params.append(source)
-        if isinstance(project_slug, str):
-            where.append("project_slug = ?")
-            params.append(project_slug)
-        clause = f"WHERE {' AND '.join(where)}" if where else ""
-        rows = store.fetchall(
-            f"SELECT id, source, title, turn_count, updated_at "
-            f"FROM conversations {clause} ORDER BY updated_at DESC LIMIT ?",
-            (*params, limit),
-        )
-        return {
-            "conversations": [
-                {
-                    "id": r["id"],
-                    "source": r["source"],
-                    "title": r["title"],
-                    "turn_count": r["turn_count"],
-                    "updated_at": r["updated_at"],
-                }
-                for r in rows
-            ],
-            "count": len(rows),
-        }
-
-    registry.register(
-        CustomTool(
-            name="query_corpus",
-            description=(
-                "List conversations matching an optional source/project filter. "
-                "Returns id, title, turn_count, updated_at."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "source": {
-                        "type": "string",
-                        "enum": ["claude-code", "claude-ai"],
-                        "description": "Optional source filter.",
-                    },
-                    "project_slug": {
-                        "type": "string",
-                        "description": "Optional project slug filter (Claude Code only).",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 50,
-                        "minimum": 1,
-                        "maximum": 1000,
-                    },
-                },
-            },
-            handler=query_corpus,
-        )
-    )
-
-    # ---- get_conversation ----------------------------------------
-    async def get_conversation(args: dict[str, Any]) -> dict[str, Any]:
-        conv_id = args["conversation_id"]
-        rows = store.fetchall(
-            "SELECT id, source, source_path, created_at, updated_at, model, "
-            "title, summary, turn_count, project_slug "
-            "FROM conversations WHERE id = ?",
-            (conv_id,),
-        )
-        if not rows:
-            return {"error": "not_found", "conversation_id": conv_id}
-        row = rows[0]
-        return {
-            "id": row["id"],
-            "source": row["source"],
-            "source_path": row["source_path"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "model": row["model"],
-            "title": row["title"],
-            "summary": row["summary"],
-            "turn_count": row["turn_count"],
-            "project_slug": row["project_slug"],
-        }
-
-    registry.register(
-        CustomTool(
-            name="get_conversation",
-            description="Fetch a single conversation's metadata by id.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "conversation_id": {"type": "string"},
-                },
-                "required": ["conversation_id"],
-            },
-            handler=get_conversation,
-        )
-    )
-
-    # ---- get_turn_window -----------------------------------------
-    async def get_turn_window(args: dict[str, Any]) -> dict[str, Any]:
-        conv_id = args["conversation_id"]
-        start = int(args.get("start_index", 0))
-        count = int(args.get("count", 20))
-        rows = store.fetchall(
-            "SELECT id, turn_index, role, content, timestamp, parent_message_uuid "
-            "FROM turns WHERE conversation_id = ? AND turn_index >= ? "
-            "ORDER BY turn_index ASC LIMIT ?",
-            (conv_id, start, count),
-        )
-        return {
-            "conversation_id": conv_id,
-            "turns": [
-                {
-                    "id": r["id"],
-                    "index": r["turn_index"],
-                    "role": r["role"],
-                    "content": r["content"],
-                    "timestamp": r["timestamp"],
-                    "parent_message_uuid": r["parent_message_uuid"],
-                }
-                for r in rows
-            ],
-        }
-
-    registry.register(
-        CustomTool(
-            name="get_turn_window",
-            description=(
-                "Fetch a contiguous window of turns from a conversation, "
-                "starting at `start_index` (default 0), up to `count` turns (default 20)."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "conversation_id": {"type": "string"},
-                    "start_index": {"type": "integer", "minimum": 0, "default": 0},
-                    "count": {"type": "integer", "minimum": 1, "maximum": 200, "default": 20},
-                },
-                "required": ["conversation_id"],
-            },
-            handler=get_turn_window,
-        )
-    )
+    # ---- read-only handlers (shared factories) --------------------
+    # The synthesis tool registry (``lucid.synthesis.tools``) uses the
+    # same factories, so both registries share one implementation.
+    registry.register(make_query_corpus_tool(store))
+    registry.register(make_get_conversation_tool(store))
+    registry.register(make_get_turn_window_tool(store))
 
     # ---- invoke_module -------------------------------------------
     async def invoke_module(args: dict[str, Any]) -> dict[str, Any]:
@@ -995,79 +1096,9 @@ def build_tool_registry(
         )
     )
 
-    # ---- get_findings --------------------------------------------
-    async def get_findings(args: dict[str, Any]) -> dict[str, Any]:
-        module = args.get("module")
-        conversation_id = args.get("conversation_id")
-        where = ["audit_run_id = ?"]
-        params: list[Any] = [audit_run_id]
-        if isinstance(module, str):
-            where.append("module = ?")
-            params.append(module)
-        if isinstance(conversation_id, str):
-            where.append("conversation_id = ?")
-            params.append(conversation_id)
-        clause = " AND ".join(where)
-        rows = store.fetchall(
-            f"SELECT id, module, behavior, intensity, confidence "
-            f"FROM findings WHERE {clause} ORDER BY detected_at DESC LIMIT 500",
-            params,
-        )
-        return {
-            "findings": [
-                {
-                    "id": r["id"],
-                    "module": r["module"],
-                    "behavior": r["behavior"],
-                    "intensity": r["intensity"],
-                    "confidence": r["confidence"],
-                }
-                for r in rows
-            ],
-            "count": len(rows),
-        }
-
-    registry.register(
-        CustomTool(
-            name="get_findings",
-            description="List findings for this audit run, optionally filtered by module or conversation.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "module": {"type": "string"},
-                    "conversation_id": {"type": "string"},
-                },
-            },
-            handler=get_findings,
-        )
-    )
-
-    # ---- log_progress --------------------------------------------
-    async def log_progress(args: dict[str, Any]) -> dict[str, Any]:
-        message = str(args.get("message") or "")
-        level = str(args.get("level") or "INFO").upper()
-        progress_log(level, message)
-        return {"ok": True}
-
-    registry.register(
-        CustomTool(
-            name="log_progress",
-            description="Emit a user-visible progress line. Level is INFO/WARNING/ERROR.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string"},
-                    "level": {
-                        "type": "string",
-                        "enum": ["DEBUG", "INFO", "WARNING", "ERROR"],
-                        "default": "INFO",
-                    },
-                },
-                "required": ["message"],
-            },
-            handler=log_progress,
-        )
-    )
+    # ---- get_findings + log_progress (shared factories) ----------
+    registry.register(make_get_findings_tool(store, audit_run_id))
+    registry.register(make_log_progress_tool(progress_log))
 
     # ---- estimate_remaining_cost --------------------------------
     async def estimate_remaining_cost(args: dict[str, Any]) -> dict[str, Any]:
