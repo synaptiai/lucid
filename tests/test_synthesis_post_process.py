@@ -46,9 +46,7 @@ def _mock_sonnet_response(structured: SynthesisSectionOutput) -> MagicMock:
 async def test_declined_section_skipped_without_sdk_call() -> None:
     """Sections with insufficient_evidence=True are returned unchanged, no SDK call."""
     async_client = MagicMock()
-    async_client.messages.parse = AsyncMock(
-        side_effect=AssertionError("should not be called")
-    )
+    async_client.messages.parse = AsyncMock(side_effect=AssertionError("should not be called"))
     section = _section(declined=True)
     result = await post_process_section(
         async_client=async_client,
@@ -72,9 +70,7 @@ async def test_populated_section_gets_enriched_with_blocks() -> None:
         cited_turn_ids=[],
     )
     async_client = MagicMock()
-    async_client.messages.parse = AsyncMock(
-        return_value=_mock_sonnet_response(structured)
-    )
+    async_client.messages.parse = AsyncMock(return_value=_mock_sonnet_response(structured))
     section = _section()
     result = await post_process_section(
         async_client=async_client,
@@ -115,8 +111,6 @@ async def test_sonnet_unparseable_response_returns_section_unchanged() -> None:
     async_client = MagicMock()
     bad_response = MagicMock()
     bad_response.parsed_output = None
-    bad_response.parsed = None
-    bad_response.output_parsed = None
     bad_response.content = []  # empty — nothing to extract
     async_client.messages.parse = AsyncMock(return_value=bad_response)
     section = _section()
@@ -150,9 +144,7 @@ async def test_batch_post_process_isolates_failures() -> None:
         ]
     )
     section_a = _section(sid="exec_summary")
-    section_b = _section(
-        sid="top_3_actions", markdown="Another [F:f2]", citations=["f2"]
-    )
+    section_b = _section(sid="top_3_actions", markdown="Another [F:f2]", citations=["f2"])
     results = await post_process_sections(
         async_client=async_client,
         sections=[section_a, section_b],
@@ -171,9 +163,7 @@ async def test_batch_post_process_isolates_failures() -> None:
 @pytest.mark.asyncio
 async def test_empty_sections_list_returns_empty() -> None:
     async_client = MagicMock()
-    async_client.messages.parse = AsyncMock(
-        side_effect=AssertionError("should not be called")
-    )
+    async_client.messages.parse = AsyncMock(side_effect=AssertionError("should not be called"))
     results = await post_process_sections(
         async_client=async_client,
         sections=[],

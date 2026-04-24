@@ -19,12 +19,12 @@ SDK shape (anthropic 0.96.0): ``AsyncMessages.parse(...)`` accepts
 ``.parsed_output`` (a property that walks content blocks looking for a
 ``ParsedTextBlock`` with ``parsed_output`` set). When the property
 returns ``None`` we fall back to extracting text blocks and validating
-the JSON directly — different SDK minors have historically exposed the
-parsed value under ``parsed`` / ``output_parsed`` / not at all.
+the JSON directly.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -43,39 +43,33 @@ SONNET_MAX_TOKENS = 4000  # generous; sections are well under 500 words
 
 
 def _extract_parsed(response: Any) -> SynthesisSectionOutput | None:
-    """Extract a :class:`SynthesisSectionOutput` from a Sonnet response.
+    """Extract the :class:`SynthesisSectionOutput` from a ParsedMessage response.
 
-    Tries, in order:
+    anthropic 0.96.0 exposes the parsed value as ``response.parsed_output``
+    (a property that walks content blocks for the parsed JSON). If that
+    property returns ``None``, fall back to reconstructing from content-block
+    text via :meth:`SynthesisSectionOutput.model_validate_json`.
 
-    1. ``response.parsed_output`` — the canonical property on
-       :class:`anthropic.types.ParsedMessage` (v0.96.0+).
-    2. ``response.parsed`` / ``response.output_parsed`` — names used by
-       older SDKs; cheap to probe defensively.
-    3. JSON inside the first text content block —
-       ``model_validate_json`` on the concatenated text blocks.
-
-    Returns ``None`` if all three fail; the caller logs a warning and
+    Returns ``None`` if both paths fail; the caller logs a warning and
     returns the section unchanged.
     """
-    for attr in ("parsed_output", "parsed", "output_parsed"):
-        candidate = getattr(response, attr, None)
-        if isinstance(candidate, SynthesisSectionOutput):
-            return candidate
+    # Primary path: SDK's own parse machinery.
+    candidate = getattr(response, "parsed_output", None)
+    if isinstance(candidate, SynthesisSectionOutput):
+        return candidate
 
-    # Fallback: reconstruct from the response's text blocks.
-    content = getattr(response, "content", None)
-    if not content:
-        return None
-    text_parts: list[str] = []
-    for block in content:
-        text = getattr(block, "text", None)
-        if isinstance(text, str):
-            text_parts.append(text)
-    if not text_parts:
-        return None
+    # Genuine fallback: reconstruct from text content blocks.
     try:
-        return SynthesisSectionOutput.model_validate_json("".join(text_parts))
-    except Exception:  # any parse failure falls through to unstructured
+        text = "".join(
+            block.text
+            for block in getattr(response, "content", []) or []
+            if hasattr(block, "text") and isinstance(block.text, str)
+        )
+        if not text:
+            return None
+        return SynthesisSectionOutput.model_validate_json(text)
+    except (ValueError, AttributeError) as err:
+        _LOGGER.warning("Content-block JSON reconstruction failed: %s", err)
         return None
 
 
@@ -128,10 +122,7 @@ async def post_process_section(
     }
     user_content = orjson.dumps(user_payload).decode()
 
-    try:
-        temperature = float(prompt.frontmatter.get("temperature", "0.0"))
-    except ValueError:
-        temperature = 0.0
+    temperature = float(prompt.frontmatter.get("temperature", "0.0"))
 
     try:
         response = await async_client.messages.parse(
@@ -174,22 +165,31 @@ async def post_process_sections(
     valid_turn_ids: list[str],
     tool_call_counts: dict[str, int] | None = None,
 ) -> list[ReportSection]:
-    """Batch post-process. Independent per-section — one failure does
-    not affect siblings. Returns a new list in input order; declined
-    sections pass through unchanged.
+    """Batch post-process — runs Sonnet per section concurrently.
+
+    Per-section failures are already isolated inside
+    :func:`post_process_section` (returns the section unchanged on any
+    error), so :func:`asyncio.gather` with the default
+    ``return_exceptions=False`` is safe — no exception propagates.
+    ``asyncio.gather`` preserves input order in the result list.
+    Declined sections pass through unchanged.
     """
-    enriched: list[ReportSection] = []
-    for section in sections:
-        enriched.append(
-            await post_process_section(
-                async_client=async_client,
-                section=section,
-                valid_finding_ids=valid_finding_ids,
-                valid_turn_ids=valid_turn_ids,
-                tool_call_counts=tool_call_counts,
+    if not sections:
+        return []
+    return list(
+        await asyncio.gather(
+            *(
+                post_process_section(
+                    async_client=async_client,
+                    section=section,
+                    valid_finding_ids=valid_finding_ids,
+                    valid_turn_ids=valid_turn_ids,
+                    tool_call_counts=tool_call_counts,
+                )
+                for section in sections
             )
         )
-    return enriched
+    )
 
 
 __all__ = ["post_process_section", "post_process_sections"]

@@ -249,13 +249,30 @@ async def run_synthesis_session(
         f"{result.sections_declined} declined",
     )
 
-    # Aggregate-claim + superlative validators run per populated
-    # section. Declined sections have empty markdown and cannot trip
-    # prose-level checks.
+    # Two consumers read tool-call counts, each with its own key shape:
+    #
+    # * The Python ``validate_aggregate_claims`` validator singularizes
+    #   the matched noun (``rstrip("sS").lower()``) before the dict
+    #   lookup, so it expects SINGULAR keys.
+    # * The Sonnet post-processor prompt
+    #   (``prompts/synthesis_validator/v1.md``) specifies the Input
+    #   shape ``{"conversations": ..., "findings": ...}`` — PLURAL.
+    #   Singular keys silently pass type-checks but bypass Sonnet's
+    #   aggregate-extraction heuristic, inflating citation_confidence.
+    #
+    # Build both; hand each consumer the shape it expects.
+    sampled_conv_count = int(corpus_stats.get("sampled_conversations") or 0)
+    sampled_turn_count = int(corpus_stats.get("sampled_turns") or 0)
+    finding_count = sum(behavior_counts.values())
     tool_call_counts: dict[str, int] = {
-        "conversation": int(corpus_stats.get("sampled_conversations") or 0),
-        "turn": int(corpus_stats.get("sampled_turns") or 0),
-        "finding": sum(behavior_counts.values()),
+        "conversation": sampled_conv_count,
+        "turn": sampled_turn_count,
+        "finding": finding_count,
+    }
+    sonnet_tool_call_counts: dict[str, int] = {
+        "conversations": sampled_conv_count,
+        "turns": sampled_turn_count,
+        "findings": finding_count,
     }
 
     # Phase 5.6b — Sonnet 4.6 post-process. Structures each populated
@@ -266,22 +283,33 @@ async def run_synthesis_session(
     if async_client is not None and sections:
         findings_for_validation = store.fetch_findings_for_run(audit_run_id)
         valid_finding_ids = [f.id for f in findings_for_validation]
-        # Valid turn-id set = union of already-cited turns across
-        # sections. The writer can only cite turns it actually fetched
-        # via get_turn_window, and those ids are already persisted in
-        # ``section.cited_turn_ids`` — a richer valid set would require
-        # querying the turns table and doesn't buy anything.
-        valid_turn_ids_set: set[str] = set()
-        for s in sections:
-            valid_turn_ids_set.update(s.cited_turn_ids)
-        valid_turn_ids = list(valid_turn_ids_set)
+        # valid_turn_ids: all turn ids belonging to conversations that
+        # have findings in this audit run. This is the superset Opus
+        # could legitimately have cited via get_turn_window — giving it
+        # to Sonnet means Sonnet can drop any cite to a turn id outside
+        # this set (whether Opus hallucinated it or simply cited a turn
+        # from a different run). An earlier approach of union-ing
+        # ``section.cited_turn_ids`` was circular: Sonnet could never
+        # drop what Opus already claimed.
+        sampled_conv_ids = {f.conversation_id for f in findings_for_validation if f.conversation_id}
+        if sampled_conv_ids:
+            placeholders = ",".join("?" for _ in sampled_conv_ids)
+            turn_rows = store.fetchall(
+                f"SELECT id FROM turns WHERE conversation_id IN ({placeholders})",
+                tuple(sampled_conv_ids),
+            )
+            valid_turn_ids = [r["id"] for r in turn_rows]
+        else:
+            # No findings reference a conversation — Sonnet gets an
+            # empty cite universe. Post-process is advisory anyway.
+            valid_turn_ids = []
         try:
             enriched = await post_process_sections(
                 async_client=async_client,
                 sections=sections,
                 valid_finding_ids=valid_finding_ids,
                 valid_turn_ids=valid_turn_ids,
-                tool_call_counts=tool_call_counts,
+                tool_call_counts=sonnet_tool_call_counts,
             )
             for original, updated in zip(sections, enriched, strict=True):
                 if (

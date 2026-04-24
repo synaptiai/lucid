@@ -236,9 +236,7 @@ async def test_run_synthesis_session_calls_sonnet_post_process(tmp_path, monkeyp
                         s.model_copy(
                             update={
                                 "blocks": [
-                                    SynthesisBlock(
-                                        text="Prose about something.", citations=[]
-                                    )
+                                    SynthesisBlock(text="Prose about something.", citations=[])
                                 ],
                                 "citation_confidence": 0.75,
                             }
@@ -246,9 +244,7 @@ async def test_run_synthesis_session_calls_sonnet_post_process(tmp_path, monkeyp
                     )
             return enriched
 
-        monkeypatch.setattr(
-            "lucid.synthesis.run.post_process_sections", _fake_post_process
-        )
+        monkeypatch.setattr("lucid.synthesis.run.post_process_sections", _fake_post_process)
 
         async_client_mock = MagicMock()
         result = await run_synthesis_session(
@@ -268,6 +264,79 @@ async def test_run_synthesis_session_calls_sonnet_post_process(tmp_path, monkeyp
         assert len(rows) == 1
         assert len(rows[0].blocks) == 1
         assert rows[0].citation_confidence == 0.75
+
+
+async def test_run_synthesis_session_sends_plural_tool_call_counts_keys(tmp_path, monkeypatch):
+    """Guards against silent-bug regression: the Sonnet prompt's Input
+    shape specifies plural keys (conversations, turns, findings).
+    Singular keys silently pass type-checks but bypass Sonnet's
+    aggregate-extraction heuristic, inflating citation_confidence.
+    """
+    from lucid.schemas import ReportSection
+    from lucid.store.init import initialize_db
+    from lucid.store.sqlite import CorpusStore
+    from lucid.synthesis.session import SynthesisHandles, SynthesisOutcome
+
+    captured_calls: list[dict[str, int]] = []
+
+    async def _fake_post_process_sections(*, tool_call_counts, sections, **_kwargs):
+        captured_calls.append(dict(tool_call_counts or {}))
+        return list(sections)
+
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run_inline(store, run_id="run-keys1")
+
+        # At least one populated section triggers the post-process branch.
+        store.upsert_report_section(
+            ReportSection(
+                audit_run_id="run-keys1",
+                section_id="exec_summary",
+                markdown="Narrative body.",
+                cited_finding_ids=[],
+                cited_turn_ids=[],
+                insufficient_evidence=False,
+                decline_reason=None,
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+
+        fake_outcome = SynthesisOutcome(
+            handles=SynthesisHandles(agent_id="a", environment_id="e", session_id="s"),
+            completed=True,
+            reason="session.status_idle",
+        )
+
+        async def _ok(*_args, **_kwargs):
+            return fake_outcome
+
+        monkeypatch.setattr("lucid.synthesis.run.SynthesisSession.run", _ok)
+        monkeypatch.setattr(
+            "lucid.synthesis.run.post_process_sections",
+            _fake_post_process_sections,
+        )
+
+        await run_synthesis_session(
+            client=MagicMock(),
+            async_client=MagicMock(),
+            store=store,
+            audit_run_id="run-keys1",
+            enabled_modules=["A"],
+            behavior_counts={"sycophancy": 1},
+            corpus_stats={"sampled_conversations": 3, "sampled_turns": 15},
+            progress_log=lambda *_: None,
+        )
+
+    assert len(captured_calls) > 0
+    keys = set(captured_calls[0].keys())
+    assert "conversations" in keys
+    assert "turns" in keys
+    assert "findings" in keys
+    # Explicitly guard against the regression: singular keys silently
+    # bypass Sonnet's citation_confidence heuristic.
+    for singular in ("conversation", "turn", "finding"):
+        assert singular not in keys, f"singular key {singular!r} — Sonnet prompt expects plural"
 
 
 async def test_run_synthesis_session_runs_validators_over_persisted_sections(tmp_path, monkeypatch):
