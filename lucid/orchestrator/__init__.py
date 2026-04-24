@@ -15,15 +15,20 @@ Public surface:
 - :func:`dispatch_tool_call` — run a single tool call.
 """
 
-from lucid.orchestrator.handler import (
-    ToolDispatchError,
-    dispatch_tool_call,
-)
 from lucid.orchestrator.tools import (
     CustomTool,
     ToolHandler,
     ToolRegistry,
     build_tool_registry,
+)
+
+# TODO(phase-3.6): drop these re-exports once tools.py moves to
+# lucid/synthesis/tools.py and all call sites import directly from
+# lucid.synthesis.handler. Kept during the Phase 3 transition so
+# external importers of `lucid.orchestrator` don't break mid-refactor.
+from lucid.synthesis.handler import (
+    ToolDispatchError,
+    dispatch_tool_call,
 )
 
 __all__ = [

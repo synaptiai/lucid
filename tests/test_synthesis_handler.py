@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from lucid.orchestrator.handler import HeartbeatMonitor, dispatch_tool_call
 from lucid.orchestrator.tools import CustomTool, ToolRegistry
+from lucid.synthesis.handler import HeartbeatMonitor, dispatch_tool_call
 
 
 def _registry_with(name: str, handler) -> ToolRegistry:  # type: ignore[no-untyped-def]
