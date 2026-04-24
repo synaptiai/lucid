@@ -399,3 +399,82 @@ class ReportSection(BaseModel):
                     f"got {self.decline_reason!r}"
                 )
         return self
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Synthesis output models
+# ──────────────────────────────────────────────────────────────────────────
+
+
+class SynthesisBlock(BaseModel):
+    """One coherent block of narrative prose with its citation pointers.
+
+    Output of the Sonnet 4.6 post-processor: it reads Opus's free-form
+    markdown with inline [F:finding_id] / [T:turn_id] tokens and
+    structures each claim into a block with explicit citation lists.
+    Validated at render time — every id must exist in the DB; blocks
+    whose aggregates_support don't match actual counts are flagged.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=2000)
+    citations: list[str] = Field(default_factory=list)  # finding_ids or turn_ids, any mix
+    aggregate_claim: str | None = None  # e.g. "across 42 conversations"
+    aggregate_support: int | None = None  # the actual count backing the claim
+
+
+class SynthesisSectionOutput(BaseModel):
+    """Validated output of one section's two-phase write.
+
+    Phase 1: Opus 4.7 writes raw markdown with [F:...] tokens.
+    Phase 2: Sonnet 4.6 post-processes the markdown into structured
+    blocks. This model holds both outputs so the raw markdown (for
+    display) and the structured blocks (for validation + rendering)
+    stay in sync.
+
+    Persisted as a ReportSection row; the Jinja2 renderer reads the
+    markdown, the validator reads the blocks.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    section_id: str = Field(min_length=1, max_length=64)
+    blocks: list[SynthesisBlock] = Field(default_factory=list)
+    raw_markdown: str = Field(default="")  # pre-post-process Opus output
+    citation_confidence: float = Field(ge=0.0, le=1.0)
+    cited_finding_ids: list[str] = Field(default_factory=list)
+    cited_turn_ids: list[str] = Field(default_factory=list)
+
+
+class SynthesisUnsupportedSection(BaseModel):
+    """Agent's honest decline to write a section given insufficient evidence.
+
+    Analog to Module H's OUT_OF_SCOPE verdict — distinguishes "the
+    evidence base is too thin to synthesize a trustworthy paragraph"
+    from "the section was attempted and failed". Rendered in the
+    template as "Section skipped: {decline_message}".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    section_id: str = Field(min_length=1, max_length=64)
+    reason: Literal["insufficient_evidence", "retrieval_failure", "generation_error"]
+    decline_message: str = Field(min_length=1, max_length=500)
+    retrieval_top_similarity: float | None = Field(default=None, ge=0.0, le=1.0)
+    retrieval_excerpt_count: int | None = Field(default=None, ge=0)
+
+
+class SynthesisSectionError(BaseModel):
+    """Per-section failure the synthesis session isolates without aborting.
+
+    Mirrors lucid.modules.base.ModuleError — keeps the rest of the
+    synthesis run going when one section blows up (generation parse
+    failure, citation-validation rejection, tool-call exception).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    section_id: str = Field(min_length=1, max_length=64)
+    error_type: str = Field(min_length=1, max_length=64)  # e.g. "parse_failed", "validation_failed"
+    message: str = Field(max_length=500)

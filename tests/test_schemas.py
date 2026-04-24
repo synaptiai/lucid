@@ -30,6 +30,10 @@ from lucid.schemas import (
     Role,
     SamplingConfigRecord,
     Source,
+    SynthesisBlock,
+    SynthesisSectionError,
+    SynthesisSectionOutput,
+    SynthesisUnsupportedSection,
     TextBlock,
     ThinkingBlock,
     TokenUsage,
@@ -450,4 +454,104 @@ def test_report_section_validator_rejects_populated_with_empty_markdown() -> Non
             insufficient_evidence=False,
             decline_reason=None,
             created_at=datetime.now(tz=UTC),
+        )
+
+
+# ----- synthesis output models -----
+
+
+def test_synthesis_block_roundtrip() -> None:
+    block = SynthesisBlock(
+        text="You showed a strong pushback pattern.",
+        citations=["f001", "f002"],
+        aggregate_claim="across 12 conversations",
+        aggregate_support=12,
+    )
+    assert SynthesisBlock.model_validate_json(block.model_dump_json()) == block
+
+
+def test_synthesis_block_allows_empty_citations() -> None:
+    """Blocks with 0 citations are valid at the schema level; the
+    uncited-high-intensity validator in Phase 5 enforces coverage."""
+    block = SynthesisBlock(text="A general observation.", citations=[])
+    assert block.citations == []
+
+
+def test_synthesis_block_rejects_empty_text() -> None:
+    with pytest.raises(ValidationError):
+        SynthesisBlock(text="", citations=["f001"])
+
+
+def test_synthesis_section_output_roundtrip() -> None:
+    section = SynthesisSectionOutput(
+        section_id="exec_summary",
+        blocks=[
+            SynthesisBlock(text="First claim.", citations=["f001"]),
+            SynthesisBlock(
+                text="Second claim across [F:f002].",
+                citations=["f002"],
+                aggregate_claim="across 7 conversations",
+                aggregate_support=7,
+            ),
+        ],
+        raw_markdown="First claim [F:f001]. Second claim across [F:f002].",
+        citation_confidence=0.82,
+        cited_finding_ids=["f001", "f002"],
+        cited_turn_ids=[],
+    )
+    assert SynthesisSectionOutput.model_validate_json(section.model_dump_json()) == section
+
+
+def test_synthesis_section_output_confidence_bounds() -> None:
+    with pytest.raises(ValidationError):
+        SynthesisSectionOutput(
+            section_id="exec_summary",
+            citation_confidence=1.5,  # out of [0, 1]
+        )
+    with pytest.raises(ValidationError):
+        SynthesisSectionOutput(
+            section_id="exec_summary",
+            citation_confidence=-0.1,
+        )
+
+
+def test_synthesis_unsupported_section_roundtrip() -> None:
+    unsupported = SynthesisUnsupportedSection(
+        section_id="top_3_actions",
+        reason="insufficient_evidence",
+        decline_message="Fewer than 3 qualifying findings above intensity 1.",
+        retrieval_top_similarity=0.42,
+        retrieval_excerpt_count=8,
+    )
+    assert (
+        SynthesisUnsupportedSection.model_validate_json(unsupported.model_dump_json())
+        == unsupported
+    )
+
+
+def test_synthesis_unsupported_section_rejects_invalid_reason() -> None:
+    with pytest.raises(ValidationError):
+        SynthesisUnsupportedSection(
+            section_id="exec_summary",
+            reason="no_such_reason",  # type: ignore[arg-type]  # not in Literal[...]
+            decline_message="x",
+        )
+
+
+def test_synthesis_section_error_roundtrip() -> None:
+    err = SynthesisSectionError(
+        section_id="module_b_narrative",
+        error_type="parse_failed",
+        message="Sonnet post-process returned malformed JSON on block 3",
+    )
+    assert SynthesisSectionError.model_validate_json(err.model_dump_json()) == err
+
+
+def test_synthesis_section_error_truncates_long_message() -> None:
+    """message has max_length=500 — strings past that fail construction."""
+    with pytest.raises(ValidationError):
+        SynthesisSectionError(
+            section_id="exec_summary",
+            error_type="runtime_error",
+            message="x" * 501,
         )
