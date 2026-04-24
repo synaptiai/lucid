@@ -164,15 +164,22 @@ def test_collect_prompt_versions_covers_every_module() -> None:
         assert version, f"empty prompt_version for module {name!r}"
 
 
-def test_collect_prompt_versions_always_pins_module_g() -> None:
-    """Module G runs as the post-session safety net, so its version
-    is pinned even when the user's ``--enabled`` set excludes it."""
+def test_collect_prompt_versions_pins_every_enabled_module() -> None:
+    """Every module in the caller-supplied ``enabled`` list gets a
+    prompt-version entry. The audit command appends Module G to
+    ``enabled`` before calling ``_collect_prompt_versions``; modules
+    not passed in are not materialized here."""
     from lucid.cli import _collect_prompt_versions
     from lucid.schemas import ModuleName
 
-    versions = _collect_prompt_versions([ModuleName.A_SPIRALBENCH])
-    assert ModuleName.G_ATTRIBUTION in versions
+    versions = _collect_prompt_versions([ModuleName.A_SPIRALBENCH, ModuleName.G_ATTRIBUTION])
+    assert set(versions.keys()) == {ModuleName.A_SPIRALBENCH, ModuleName.G_ATTRIBUTION}
     assert versions[ModuleName.G_ATTRIBUTION]
+
+    # When G is NOT in the caller's enabled list, it is not auto-added;
+    # that responsibility belongs to the audit command.
+    versions_a_only = _collect_prompt_versions([ModuleName.A_SPIRALBENCH])
+    assert set(versions_a_only.keys()) == {ModuleName.A_SPIRALBENCH}
 
 
 # ----- helpers --------------------------------------------------------

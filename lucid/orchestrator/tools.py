@@ -647,6 +647,9 @@ def build_tool_registry(
     allow_module_d: bool = False,
     embedding_provider: EmbeddingProvider | None = None,
     cost_estimate: CostEstimate | None = None,
+    spend_tracker: dict[str, float] | None = None,
+    per_module_usd: dict[ModuleName, float] | None = None,
+    debited_modules: set[ModuleName] | None = None,
 ) -> ToolRegistry:
     """Wire up the 8 custom tools for a given audit run.
 
@@ -685,19 +688,25 @@ def build_tool_registry(
 
         progress_log = _default_progress
 
-    # Mutable close-over for the running cost tally.
-    spend_tracker = {"accrued_usd": 0.0, "budget_usd": remaining_budget_usd}
+    # Mutable close-over for the running cost tally. Callers may supply
+    # pre-built dicts/sets so that direct-invocation paths (e.g. the
+    # deterministic scoring loop in :mod:`lucid.run`) can share spend
+    # state with the tool handlers registered here.
+    if spend_tracker is None:
+        spend_tracker = {"accrued_usd": 0.0, "budget_usd": remaining_budget_usd}
 
     # Per-module USD upper bounds from the pre-flight estimate. ``None``
     # entries mean "no estimate seen for this module" — typically the
     # estimate covers the modules in the user's --enabled set; modules
     # invoked outside that set (rare) accrue no spend.
-    per_module_usd: dict[ModuleName, float] = (
-        {mc.module: mc.usd for mc in cost_estimate.per_module} if cost_estimate else {}
-    )
+    if per_module_usd is None:
+        per_module_usd = (
+            {mc.module: mc.usd for mc in cost_estimate.per_module} if cost_estimate else {}
+        )
     # Track which modules have already been debited so a second
     # invocation (resume / orchestrator retry) does not double-charge.
-    debited_modules: set[ModuleName] = set()
+    if debited_modules is None:
+        debited_modules = set()
 
     registry = ToolRegistry()
 

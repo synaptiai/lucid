@@ -55,7 +55,6 @@ from lucid.ingest.base import IngestError, fingerprint_corpus  # noqa: E402
 from lucid.ingest.claude_ai import ClaudeAiAdapter, parse_memory_file, parse_projects  # noqa: E402
 from lucid.ingest.claude_code import ClaudeCodeAdapter  # noqa: E402
 from lucid.logging import configure_logging  # noqa: E402
-from lucid.orchestrator.system_prompt import SYSTEM_PROMPT  # noqa: E402
 from lucid.run import AuditInputs, LockHeldError, generate_run_id, run_audit  # noqa: E402
 from lucid.sampling import SamplingConfig, sample_conversations  # noqa: E402
 from lucid.schemas import Conversation, ModuleName, Source, Turn  # noqa: E402
@@ -237,6 +236,13 @@ def audit(
     enabled = list(DEFAULT_MODULES)
     if include_module_d and ModuleName.D_PERSPECTIVE not in enabled:
         enabled.append(ModuleName.D_PERSPECTIVE)
+    # Module G (deterministic attribution) runs last by convention
+    # from the scoring loop — it produces the time/model charts the
+    # report depends on and is cheap (no LLM). DEFAULT_MODULES omits
+    # G because its cost-estimate entry is trivially zero; the
+    # scoring loop still needs it in the enabled list.
+    if ModuleName.G_ATTRIBUTION not in enabled:
+        enabled.append(ModuleName.G_ATTRIBUTION)
 
     counter = _build_counter()
     estimator = CostEstimator(count_tokens=counter)
@@ -287,39 +293,36 @@ def audit(
 
     data_dir = Path(".lucid")
     try:
-        sync_client, async_client = _build_anthropic_clients_or_exit()
+        async_client = _build_async_anthropic_client_or_exit()
     except ImportError as err:
         _CONSOLE.print(f"[red]Anthropic SDK not installed:[/red] {err}")
         raise typer.Exit(EXIT_USAGE) from err
     embedding_provider = _build_embedding_provider_or_warn()
 
     # memories.json (Claude.ai exports only) seeds Module H. Persist
-    # before run_audit so the dispatcher can read it inside the session.
+    # before run_audit so the dispatcher can read it when the scoring
+    # loop invokes Module H.
     memories_persisted = _persist_memories_for_sources(data_dir, source_paths)
     if memories_persisted:
         _CONSOLE.print(f"[dim]Loaded {memories_persisted} memory file(s) for Module H.[/dim]")
 
     run_id = generate_run_id()
-    kickoff_message = _build_kickoff_message(run_id=run_id, inputs=inputs)
 
     _CONSOLE.print(
-        f"[cyan]Launching Managed Agents session for {run_id}. "
+        f"[cyan]Launching deterministic scoring loop for {run_id}. "
         f"Budget ceiling: ${authorized_budget:.2f}. This will cost real money.[/cyan]"
     )
 
     def _progress(level: str, message: str) -> None:
-        _CONSOLE.print(f"[dim]\\[agent][/dim] \\[{level}] {message}")
+        _CONSOLE.print(f"[dim]\\[scoring][/dim] \\[{level}] {message}")
 
     try:
         result = run_audit(
             inputs=inputs,
             data_dir=data_dir,
-            client=sync_client,
             async_client=async_client,
             embedding_provider=embedding_provider,
             allow_module_d=allow_module_d,
-            system_prompt=SYSTEM_PROMPT,
-            kickoff_message=kickoff_message,
             prompt_versions=prompt_versions,
             progress_log=_progress,
             run_id=run_id,
@@ -332,13 +335,6 @@ def audit(
         f"[green]Audit {result.run_id} finished:[/green] status={result.status}, "
         f"reason={result.reason}, findings_written={result.findings_written}"
     )
-    if result.outcome is not None:
-        outcome = result.outcome
-        _CONSOLE.print(
-            f"[dim]events={outcome.events_received} tool_calls={outcome.tool_calls} "
-            f"cache_read_tokens={outcome.cache_read_tokens} "
-            f"cache_write_tokens={outcome.cache_write_tokens}[/dim]"
-        )
     if result.report_path is not None:
         _CONSOLE.print(f"[green]Report:[/green] {result.report_path}")
     if result.status != "completed":
@@ -998,19 +994,12 @@ def _build_counter() -> TokenCounter:
 def _build_anthropic_clients_or_exit() -> tuple[Anthropic, AsyncAnthropic]:
     """Return ``(sync_client, async_client)`` or raise ``typer.Exit``.
 
-    Lucid needs both shapes for one audit:
-
-    * **Sync** ``Anthropic()`` drives :class:`ManagedAgentsSession` —
-      the SDK's ``beta.agents.create`` / ``events.send`` /
-      ``events.stream`` surface is synchronous and the driver bridges
-      to async internally.
-    * **Async** ``AsyncAnthropic()`` is handed to every detection
-      module so ``await client.messages.create(...)`` runs as a real
-      coroutine. Passing a sync client to an ``await`` site does not
-      raise — it returns a coroutine-like object that, when awaited,
-      executes a blocking HTTP call on the event loop. Visibly this
-      looks like a hang (0% CPU, one open socket, no log output). The
-      separate async client prevents this entire failure mode.
+    Retained for the ``cleanup-agents`` command, which calls the
+    synchronous ``beta.agents`` lifecycle endpoints to archive stale
+    orchestrator agents. The audit command itself uses
+    :func:`_build_async_anthropic_client_or_exit` — every detection
+    module is ``await client.messages.create(...)`` and needs the
+    async shape.
 
     A single :envvar:`ANTHROPIC_API_KEY` covers both clients.
     """
@@ -1023,6 +1012,28 @@ def _build_anthropic_clients_or_exit() -> tuple[Anthropic, AsyncAnthropic]:
     from anthropic import Anthropic, AsyncAnthropic
 
     return Anthropic(api_key=key), AsyncAnthropic(api_key=key, timeout=120.0)
+
+
+def _build_async_anthropic_client_or_exit() -> AsyncAnthropic:
+    """Return an ``AsyncAnthropic()`` client for the audit path.
+
+    Every detection module uses ``await client.messages.create(...)``,
+    so the audit path only needs the async client. Passing a sync
+    ``Anthropic()`` to an ``await`` site does not raise — it returns a
+    coroutine-like object that, when awaited, executes a blocking HTTP
+    call on the event loop. Visibly this looks like a hang (0% CPU,
+    one open socket, no log output). Using the async client here
+    prevents that failure mode.
+    """
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        _CONSOLE.print(
+            "[red]ANTHROPIC_API_KEY is not set. Set it in .env.local or export it.[/red]"
+        )
+        raise typer.Exit(EXIT_USAGE)
+    from anthropic import AsyncAnthropic
+
+    return AsyncAnthropic(api_key=key, timeout=120.0)
 
 
 def _build_embedding_provider_or_warn() -> EmbeddingProvider | None:
@@ -1104,124 +1115,6 @@ def _persist_memories_for_sources(data_dir: Path, source_paths: dict[Source, Pat
     return persisted
 
 
-_MODULE_BLURBS: dict[str, str] = {
-    "A": "Spiral-Bench behaviors (13 labels, intensity 1–3)",
-    "B": "Sharma paired-exchange sycophancy (feedback, answer, mimicry, are-you-sure)",
-    "C": "SycEval progressive vs regressive classifier",
-    "D": "Jain perspective sycophancy (full-conversation framing drift)",
-    "E": "BeliefShift DCS-simplified cross-conversation drift",
-    "F": "ITP user-prompt tactics (9 categories)",
-    "H": "Memory-corpus consistency with source-aware retrieval",
-}
-
-
-def _build_kickoff_message(*, run_id: str, inputs: AuditInputs) -> str:
-    """Compose the orchestrator kickoff message as an imperative plan.
-
-    The kickoff IS the execution plan. The orchestrator (Opus 4.7)
-    receives a numbered step-by-step sequence and executes every step
-    before stopping. Conversation ids are referenced symbolically —
-    :code:`query_corpus` returns them in Step 2 and every subsequent
-    :code:`invoke_module` reuses that captured list.
-
-    **Why symbolic, not inline:** the pre-Opus kickoff embedded all ids
-    in every step, producing a ~27KB kickoff for 100 convs × 7 modules.
-    Sonnet 4.6 consistently stopped after :code:`query_corpus` on that
-    shape (run-138d13ac9653: ``events=7, tool_calls=1``). The symbolic
-    shape maps to the natural "discover → iterate" flow the model
-    already knows.
-
-    Not cache-stable — ``run_id`` + per-run corpus size vary — but the
-    orchestrator system prompt is, and it holds the tool descriptions +
-    workflow contract.
-    """
-    enabled_letters = sorted(m.value for m in inputs.enabled_modules)
-    sample_n = len(inputs.sampled)
-    behaviour_letters = [letter for letter in enabled_letters if letter != "G"]
-    # Final expected tool-call count: 1 kickoff log + 1 query_corpus +
-    # 2 per behaviour module (log + invoke) + 1 for G + 1 get_findings +
-    # 1 closing log.
-    expected_tool_calls = 1 + 1 + 2 * len(behaviour_letters) + 1 + 1 + 1
-    # Pad query_corpus limit well above the sample size so nothing gets
-    # truncated. The corpus ingest already sampled to ``sample_n``; the
-    # +50 cushion covers any ingest-vs-sample off-by-one.
-    query_limit = max(sample_n + 50, 200)
-
-    lines: list[str] = [
-        f"Audit run: {run_id}",
-        f"Corpus: {sample_n} sampled conversations",
-        f"Enabled modules (execute in this order): {', '.join(enabled_letters)}",
-        f"Budget ceiling: ${inputs.authorized_budget_usd:.2f}",
-        "",
-        "Execute every step below in order. Do not stop between steps.",
-        f"A complete run issues approximately {expected_tool_calls} tool calls.",
-        "If any step returns an error or non-completed status, log_progress",
-        "that at WARNING and continue to the next step. Never abort.",
-        "",
-    ]
-
-    step = 1
-    lines.append(
-        f'Step {step}: log_progress(level="INFO", '
-        f'message="Audit {run_id} starting: {sample_n} convs, '
-        f'${inputs.authorized_budget_usd:.2f} budget")'
-    )
-    step += 1
-
-    lines.extend(
-        [
-            f"Step {step}: query_corpus(limit={query_limit})",
-            "         Capture `conversations[*].id` from the response. Every",
-            "         invoke_module call below passes THAT captured list",
-            "         verbatim as its `conversation_ids` argument.",
-        ]
-    )
-    step += 1
-
-    for letter in behaviour_letters:
-        blurb = _MODULE_BLURBS.get(letter, f"Module {letter}")
-        lines.append(
-            f'Step {step}: log_progress(level="INFO", message="Running Module {letter} — {blurb}")'
-        )
-        lines.append(
-            f'         invoke_module(module="{letter}", '
-            "conversation_ids=<captured ids from Step 2>)"
-        )
-        step += 1
-
-    lines.extend(
-        [
-            f'Step {step}: invoke_module(module="G", conversation_ids=<captured ids from Step 2>)',
-            "         (Deterministic attribution; no LLM cost.)",
-        ]
-    )
-    step += 1
-
-    lines.append(f"Step {step}: get_findings()   # verify total coverage")
-    step += 1
-
-    lines.extend(
-        [
-            f'Step {step}: log_progress(level="INFO", '
-            'message="Audit complete: <M> findings across <N> conversations")',
-            "         Then remain idle. The CLI handles report rendering.",
-        ]
-    )
-
-    lines.extend(
-        [
-            "",
-            "Reminders:",
-            "  - invoke_module persists findings automatically. Never call store_finding.",
-            "  - Always pass the FULL id list from Step 2 to each invoke_module.",
-            "  - Module G is deterministic; the CLI also re-runs it as a safety net,",
-            "    but your Step-G call keeps the session log self-describing.",
-        ]
-    )
-
-    return "\n".join(lines)
-
-
 def _module_primary_prompt_version(module: ModuleName) -> str:
     """Return the primary judge-prompt version for ``module``.
 
@@ -1271,16 +1164,10 @@ def _collect_prompt_versions(enabled: list[ModuleName]) -> dict[ModuleName, str]
     """Recorded on ``audit_runs.prompt_versions_json`` for
     calibration reproducibility.
 
-    Module G's version is always pinned because it runs as a
-    post-session safety net even when not in the user's ``enabled``
-    set.
+    Module G is always in ``enabled`` (appended by the audit command)
+    because the scoring loop runs it as the last module.
     """
-    versions = {module: _module_primary_prompt_version(module) for module in enabled}
-    if ModuleName.G_ATTRIBUTION not in versions:
-        versions[ModuleName.G_ATTRIBUTION] = _module_primary_prompt_version(
-            ModuleName.G_ATTRIBUTION
-        )
-    return versions
+    return {module: _module_primary_prompt_version(module) for module in enabled}
 
 
 def _async_anthropic_client_or_exit() -> object:

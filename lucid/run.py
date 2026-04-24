@@ -10,27 +10,20 @@ What this file owns:
   is bad).
 - Building the tool registry bound to (store, audit_run_id, budget,
   async_client, embedding_provider, allow_module_d, cost_estimate).
-- Running the Managed Agents session with the supplied kickoff message
-  and system prompt (the prompt is threaded through
-  ``OrchestratorConfig`` so there is no monkey-patching of
-  ``create_agent``).
-- Re-running Module G (deterministic time/model attribution) directly
-  against the persisted corpus once the session ends, as a safety net
-  in case the orchestrator skipped the in-session attribution call.
+  The registry is retained for future synthesis-phase wiring; the
+  scoring phase invokes modules directly via
+  :func:`invoke_module_for_run` in a deterministic for-loop.
+- Running the deterministic scoring loop (:func:`_run_scoring_loop`)
+  over every enabled module. Each module returns a status; the audit
+  is ``completed`` iff every module returned ``status="completed"``.
 - Rendering the HTML report from persisted findings and returning the
   output path.
 - Transitioning the AuditRun to `completed` / `partial` / `failed`
-  based on the session outcome.
+  based on the aggregated module outcomes.
 
-Two clients are required:
-
-- A *sync* ``Anthropic`` client drives :class:`ManagedAgentsSession` —
-  the SDK's ``beta.agents.create`` / ``events.send`` / ``events.stream``
-  surface is synchronous and the driver bridges to async internally.
-- An *async* :class:`AsyncAnthropic` client is handed to the dispatcher
-  (and from there to every detection module) so module ``await
-  client.messages.create(...)`` calls run as real coroutines instead of
-  blocking the event loop.
+Only an *async* :class:`AsyncAnthropic` client is required: every
+detection module (A, B, C, D, E, F, H) uses ``await
+client.messages.create(...)`` and Module G is deterministic (no LLM).
 """
 
 from __future__ import annotations
@@ -38,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,16 +40,10 @@ from typing import TYPE_CHECKING, Any
 from filelock import FileLock, Timeout
 
 from lucid.cost import CostEstimate
-from lucid.orchestrator.managed_agent import (
-    ManagedAgentsSession,
-    OrchestratorConfig,
-    SessionOutcome,
-)
 from lucid.orchestrator.tools import (
     ToolRegistry,
     build_tool_registry,
     invoke_module_for_run,
-    run_attribution_safety_net,
 )
 from lucid.report.generator import write_deck, write_report
 from lucid.schemas import (
@@ -75,7 +62,7 @@ from lucid.store import SCHEMA_VERSION, initialize_db
 from lucid.store.sqlite import CorpusStore
 
 if TYPE_CHECKING:  # pragma: no cover
-    from anthropic import Anthropic, AsyncAnthropic
+    from anthropic import AsyncAnthropic
 
     from lucid.modules.embeddings import EmbeddingProvider
     from lucid.sampling import SamplingConfig
@@ -123,7 +110,6 @@ class AuditInputs:
 class AuditResult:
     run_id: str
     status: AuditStatus
-    outcome: SessionOutcome | None
     findings_written: int
     reason: str
     report_path: Path | None = None
@@ -149,11 +135,8 @@ def _lock_path_for(data_dir: Path) -> Path:
 def generate_run_id() -> str:
     """Mint a fresh ``run-<12-hex>`` audit-run id.
 
-    Public so the CLI can pre-allocate the id and weave it into the
-    kickoff message before handing the same id back to ``run_audit``
-    via ``run_id=``. Without this, the orchestrator has no way to
-    reference the run it is working on (the session API does not
-    leak the audit-run id to the agent).
+    Public so the CLI can pre-allocate the id and reference the same id
+    it hands back to ``run_audit`` via ``run_id=``.
     """
     return f"run-{uuid.uuid4().hex[:12]}"
 
@@ -256,39 +239,6 @@ def _count_findings(store: CorpusStore, run_id: str) -> int:
     return int(rows[0]["n"]) if rows else 0
 
 
-async def _attribution_safety_net(
-    *,
-    store: CorpusStore,
-    run_id: str,
-    sampled_ids: list[str],
-    progress_log: Callable[[str, str], None],
-) -> int:
-    """Bridge :func:`run_attribution_safety_net` + progress logging.
-
-    The orchestrator's system prompt instructs it to call
-    ``invoke_module(G)`` last, but Sonnet 4.6 sometimes skips a step
-    under token pressure or unusual error paths. Module G is
-    deterministic (no LLM, idempotent), so re-running it costs
-    nothing and fills any attribution gap. Returns the number of
-    *new* findings persisted (zero if the orchestrator already ran G).
-    """
-    stored, idempotent, errors = await run_attribution_safety_net(
-        store=store,
-        audit_run_id=run_id,
-        conversation_ids=sampled_ids,
-    )
-    if errors:
-        progress_log(
-            "WARNING",
-            f"post-run Module G surfaced {len(errors)} error(s); the report may have gaps.",
-        )
-    progress_log(
-        "INFO",
-        f"post-run Module G safety net: stored={stored}, idempotent_skips={idempotent}.",
-    )
-    return stored
-
-
 def _render_report_or_log(
     *,
     store: CorpusStore,
@@ -339,17 +289,12 @@ def run_audit(
     *,
     inputs: AuditInputs,
     data_dir: Path,
-    client: Anthropic,
     async_client: AsyncAnthropic,
-    system_prompt: str,
-    kickoff_message: str,
     prompt_versions: dict[ModuleName, str],
     embedding_provider: EmbeddingProvider | None = None,
     allow_module_d: bool = False,
     progress_log: Callable[[str, str], None] | None = None,
     lock_timeout_seconds: float = 0.1,
-    session_runner: Callable[[ManagedAgentsSession, str], Coroutine[Any, Any, SessionOutcome]]
-    | None = None,
     run_id: str | None = None,
     report_dir: Path = DEFAULT_REPORT_DIR,
 ) -> AuditResult:
@@ -357,17 +302,12 @@ def run_audit(
 
     Parameters
     ----------
-    client
-        *Sync* Anthropic client used by :class:`ManagedAgentsSession`
-        for the agent / environment / session / events transport. The
-        SDK's beta.agents surface is synchronous; the driver bridges to
-        async internally for the event loop.
     async_client
         :class:`AsyncAnthropic` client used by every detection module
         (A, B, C, D, E, F, H) for ``await client.messages.create(...)``.
         Modules unit-test against ``AsyncMock`` clients of this same
-        shape, so passing a sync client here causes silent event-loop
-        blocking on every classification call.
+        shape; passing a sync client would silently block the event
+        loop on every classification call.
     embedding_provider
         Optional :class:`~lucid.modules.embeddings.EmbeddingProvider`
         for Module H. ``None`` makes Module H return
@@ -375,10 +315,6 @@ def run_audit(
     allow_module_d
         Whether the dispatcher should run Module D when invoked. Wired
         from ``--include-module-d`` at the CLI.
-    session_runner
-        Injectable for tests so a fake session can short-circuit the
-        Managed Agents transport. Defaults to
-        ``session.run(kickoff_message)``.
 
     Returns
     -------
@@ -411,6 +347,8 @@ def run_audit(
     try:
         resolved_run_id = run_id or generate_run_id()
         report_path: Path | None = None
+        status: AuditStatus = "failed"
+        reason = "no run executed"
         with CorpusStore(db_path) as store:
             _persist_corpus(store, inputs.sampled, inputs.turns_by_conv)
             _create_audit_run_row(
@@ -419,6 +357,21 @@ def run_audit(
                 inputs=inputs,
                 prompt_versions=prompt_versions,
             )
+
+            # Spend state is shared between the tool registry (for any
+            # future synthesis-phase tool handlers) and the scoring
+            # loop (which calls ``invoke_module_for_run`` directly).
+            # Build it at this scope so both views reference the same
+            # mutable state — a module debited once by the scoring loop
+            # must not be double-charged by a later tool invocation.
+            spend_tracker: dict[str, float] = {
+                "accrued_usd": 0.0,
+                "budget_usd": inputs.authorized_budget_usd,
+            }
+            per_module_usd: dict[ModuleName, float] = {
+                mc.module: mc.usd for mc in inputs.estimate.per_module
+            }
+            debited_modules: set[ModuleName] = set()
 
             registry = build_tool_registry(
                 store=store,
@@ -429,35 +382,33 @@ def run_audit(
                 allow_module_d=allow_module_d,
                 embedding_provider=embedding_provider,
                 cost_estimate=inputs.estimate,
-            )
-            session = ManagedAgentsSession(
-                client=client,
-                registry=registry,
-                config=OrchestratorConfig(
-                    run_id=resolved_run_id,
-                    system_prompt=system_prompt,
-                ),
+                spend_tracker=spend_tracker,
+                per_module_usd=per_module_usd,
+                debited_modules=debited_modules,
             )
 
-            runner = session_runner or _default_session_runner
             sampled_ids = [c.id for c in inputs.sampled]
-            # One asyncio.run for the whole pipeline. Two sequential
-            # ``asyncio.run`` calls would tear down a fresh event loop
-            # between the session and the safety net, killing any
-            # background SDK tasks (HTTP keep-alive, connection pools)
-            # the Anthropic client spawned during the session.
-            outcome, status, reason = asyncio.run(
-                _execute_session_and_safety_net(
-                    runner=runner,
-                    session=session,
-                    kickoff_message=kickoff_message,
-                    store=store,
-                    audit_run_id=resolved_run_id,
-                    sampled_ids=sampled_ids,
-                    enabled_modules=inputs.enabled_modules,
-                    progress_log=progress_log,
+            try:
+                status, reason = asyncio.run(
+                    _execute_scoring(
+                        store=store,
+                        registry=registry,
+                        audit_run_id=resolved_run_id,
+                        enabled_modules=inputs.enabled_modules,
+                        sampled_ids=sampled_ids,
+                        progress_log=progress_log,
+                        anthropic_client=async_client,
+                        embedding_provider=embedding_provider,
+                        allow_module_d=allow_module_d,
+                        per_module_usd=per_module_usd,
+                        debited_modules=debited_modules,
+                        spend_tracker=spend_tracker,
+                    )
                 )
-            )
+            except Exception as err:
+                _LOGGER.exception("audit scoring raised")
+                status = "failed"
+                reason = f"exception: {err}"
 
             # Finalize the audit_run row BEFORE rendering: the report
             # reads status + completed_at from this row, and rendering
@@ -480,7 +431,6 @@ def run_audit(
         return AuditResult(
             run_id=resolved_run_id,
             status=status,
-            outcome=outcome,
             findings_written=findings_written,
             reason=reason,
             report_path=report_path,
@@ -510,6 +460,10 @@ async def _run_scoring_loop(
     (bounded by its own semaphores, see e.g. Module H). Returns the
     per-module result dicts that ``invoke_module_for_run`` produced,
     in the order the caller supplied ``enabled_modules``.
+
+    Module G (deterministic attribution; no LLM) runs here as the last
+    enabled module by convention from the CLI — not as a post-session
+    safety net. The loop does not treat it specially.
 
     This function performs no error recovery: a raised exception from
     ``invoke_module_for_run`` propagates to the caller (the scoring
@@ -544,86 +498,7 @@ async def _run_scoring_loop(
     return results
 
 
-async def _execute_session_and_safety_net(
-    *,
-    runner: Callable[[ManagedAgentsSession, str], Coroutine[Any, Any, SessionOutcome]],
-    session: ManagedAgentsSession,
-    kickoff_message: str,
-    store: CorpusStore,
-    audit_run_id: str,
-    sampled_ids: list[str],
-    enabled_modules: list[ModuleName],
-    progress_log: Callable[[str, str], None],
-) -> tuple[SessionOutcome | None, AuditStatus, str]:
-    """Drive the orchestrator session, then backfill + safety net.
-
-    Three phases share one event loop:
-
-    1. **Managed Agents session** (best-effort). Sonnet 4.6 sometimes
-       produces a short response after ``query_corpus`` and goes
-       idle without invoking any behaviour module. We treat the
-       session as informational; the actual finding-production
-       contract belongs to the next two phases.
-    2. **Direct-invocation backfill.** Any enabled module without a
-       ``module_progress`` row is invoked via the registry's
-       ``invoke_module`` handler. Reuses the same dispatcher path
-       as the session so spend-tracking, persistence, and progress
-       writes stay consistent.
-    3. **Module G safety net.** Always runs — deterministic
-       attribution is idempotent and cheap.
-
-    A single event loop keeps SDK background HTTP cleanup tasks
-    alive across phases (consolidating two ``asyncio.run`` calls
-    fixed an SDK-task-destruction race in the earlier diff).
-    """
-    outcome: SessionOutcome | None = None
-    status: AuditStatus
-    reason: str
-    try:
-        outcome = await runner(session, kickoff_message)
-    except Exception as err:
-        _LOGGER.exception("audit session raised")
-        status = "failed"
-        reason = f"exception: {err}"
-    else:
-        if outcome.completed:
-            status = "completed"
-            reason = outcome.reason
-        else:
-            status = "partial"
-            reason = outcome.reason or "partial"
-
-    try:
-        await _backfill_unfinished_modules(
-            store=store,
-            registry=session.registry,
-            audit_run_id=audit_run_id,
-            enabled_modules=enabled_modules,
-            sampled_ids=sampled_ids,
-            progress_log=progress_log,
-        )
-    except Exception as err:  # pragma: no cover — logged + safety net still runs
-        _LOGGER.exception("post-session backfill failed")
-        progress_log("ERROR", f"post-session backfill failed: {err}")
-
-    try:
-        await _attribution_safety_net(
-            store=store,
-            run_id=audit_run_id,
-            sampled_ids=sampled_ids,
-            progress_log=progress_log,
-        )
-    except Exception as err:
-        # Findings are already in the DB; losing the audit_runs row
-        # update for a safety-net failure would be strictly worse
-        # than the missing attribution rows.
-        _LOGGER.exception("post-run Module G safety net failed")
-        progress_log("ERROR", f"post-run Module G safety net failed: {err}")
-
-    return outcome, status, reason
-
-
-async def _backfill_unfinished_modules(
+async def _execute_scoring(
     *,
     store: CorpusStore,
     registry: ToolRegistry,
@@ -631,43 +506,48 @@ async def _backfill_unfinished_modules(
     enabled_modules: list[ModuleName],
     sampled_ids: list[str],
     progress_log: Callable[[str, str], None],
-) -> None:
-    """Invoke any enabled module the orchestrator skipped.
+    anthropic_client: AsyncAnthropic | None,
+    embedding_provider: EmbeddingProvider | None,
+    allow_module_d: bool,
+    per_module_usd: dict[ModuleName, float],
+    debited_modules: set[ModuleName],
+    spend_tracker: dict[str, float],
+) -> tuple[AuditStatus, str]:
+    """Execute the deterministic scoring phase and return (status, reason).
 
-    Module G is excluded — the dedicated safety net runs it
-    unconditionally. The check is on ``module_progress`` rather than
-    findings: a module that ran but produced zero findings is still
-    "done" and should not be retried.
+    Wraps :func:`_run_scoring_loop` with outcome aggregation. Each
+    module returns a status string; the audit is ``completed`` iff
+    every module returned ``status="completed"``, otherwise
+    ``partial``. Per-conversation errors (``module_errors`` in the
+    result dict) do NOT flip the overall status — those are documented
+    diagnostics, not failures. Transport-level exceptions propagate
+    from the loop and are caught by :func:`run_audit`.
 
-    Uses the registry's own ``invoke_module`` handler so spend
-    debits, ``module_progress`` writes, and finding persistence
-    follow the same path the orchestrator would have taken.
+    The ``registry`` parameter is retained for future synthesis-phase
+    wiring (Phase 5 will thread it through to a second coroutine
+    ``_execute_synthesis``). It is unused in the scoring phase.
     """
-    if not sampled_ids:
-        return
-    invoke_handler = registry.get("invoke_module")
-    if invoke_handler is None:  # pragma: no cover — registry always has it
-        return
-    seen = {p.module for p in store.fetch_module_progress(audit_run_id)}
-    pending = [m for m in enabled_modules if m is not ModuleName.G_ATTRIBUTION and m not in seen]
-    if not pending:
-        return
-    progress_log(
-        "INFO",
-        f"Orchestrator did not invoke {len(pending)} module(s); "
-        f"backfilling directly: {', '.join(m.value for m in pending)}",
+    _ = registry  # retained for synthesis wiring; see docstring.
+    results = await _run_scoring_loop(
+        store=store,
+        audit_run_id=audit_run_id,
+        enabled_modules=enabled_modules,
+        sampled_ids=sampled_ids,
+        progress_log=progress_log,
+        anthropic_client=anthropic_client,
+        embedding_provider=embedding_provider,
+        allow_module_d=allow_module_d,
+        per_module_usd=per_module_usd,
+        debited_modules=debited_modules,
+        spend_tracker=spend_tracker,
     )
-    for module in pending:
-        await invoke_handler.handler(
-            {
-                "module": module.value,
-                "conversation_ids": sampled_ids,
-            }
-        )
-
-
-async def _default_session_runner(session: ManagedAgentsSession, kickoff: str) -> SessionOutcome:
-    return await session.run(kickoff)
+    all_completed = all(r.get("status") == "completed" for r in results)
+    if all_completed:
+        return "completed", "all modules completed"
+    partial_reasons = [
+        f"{r.get('module')}={r.get('status')}" for r in results if r.get("status") != "completed"
+    ]
+    return "partial", f"partial: {', '.join(partial_reasons)}"
 
 
 __all__ = [
