@@ -15,12 +15,21 @@ Alpha. In-progress submission for the Anthropic Opus 4.7 hackathon
 (2026-04-21 → 2026-04-26). Not yet published to PyPI — install from
 source until a v0.1.0 tag lands.
 
-The audit pipeline runs end-to-end: ingest → cost gate → Managed Agents
-orchestrator (with direct-invocation backfill) → modules A/B/C/D/E/F/H
-plus deterministic G → static HTML report + hackathon slide deck.
-Module D (Jain perspective sycophancy) runs by default per PRD §4.4; use
-`--no-include-module-d` on tight-cost runs. Calibration numbers against
-Spiral-Bench v1.2 live in [`docs/calibration.md`](docs/calibration.md).
+The audit pipeline runs in two phases:
+
+1. **Scoring** — deterministic Python invokes modules A/B/C/D/E/F/H
+   plus Module G (attribution), each producing `Finding` rows.
+2. **Synthesis** — a Managed Agents session with Claude Opus 4.7
+   reads the findings + spot-reads the corpus and writes narrative
+   report sections (executive summary, top-3 actions, headline
+   framing, per-module prose). Every factual claim cites a finding
+   or turn id; the HTML renderer resolves citations to anchor links.
+
+Pass `--no-synthesis` to skip the narrative phase; the scoring phase
+still produces all findings + the deterministic report scaffolding.
+Module D (Jain perspective sycophancy) runs by default per PRD §4.4;
+use `--no-include-module-d` on tight-cost runs. Calibration numbers
+against Spiral-Bench v1.2 live in [`docs/calibration.md`](docs/calibration.md).
 
 ## Install
 

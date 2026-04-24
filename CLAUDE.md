@@ -4,7 +4,7 @@ Instructions for Claude Code working in this repository.
 
 ## What this project is
 
-Lucid is an open-source epistemic audit tool for personal AI conversation history. It ingests a user's Claude Code sessions and Claude.ai conversation export, applies a composition of published AI safety research frameworks (SpiralBench, Sharma sycophancy, SycEval, Jain perspective sycophancy, BeliefShift, Truth Decay, Influence Tactics Protocol) via Claude Managed Agents, and produces a structured report surfacing sycophancy events, belief drift, reinforcement spirals, user influence tactics, memory-corpus consistency, and time/model attribution.
+Lucid is an open-source epistemic audit tool for personal AI conversation history. It ingests a user's Claude Code sessions and Claude.ai conversation export, applies a composition of published AI safety research frameworks (SpiralBench, Sharma sycophancy, SycEval, Jain perspective sycophancy, BeliefShift, Truth Decay, Influence Tactics Protocol) via a two-phase pipeline — deterministic Python scoring, then a Managed Agents synthesis session that writes narrative report sections — and produces a structured report surfacing sycophancy events, belief drift, reinforcement spirals, user influence tactics, memory-corpus consistency, and time/model attribution.
 
 This is a hackathon build (April 21-26, 2026). Submission goals, full scope, and detailed architecture live in `docs/PRD.md` and `docs/BUILD_GUIDE.md`. **Read those first for context before making architectural decisions.** This file is for operational conventions.
 
@@ -49,6 +49,10 @@ uv run lucid audit --source claude-ai --path ./export --no-include-module-d --dr
 LUCID_ALLOW_UNATTENDED=1 uv run lucid audit --source claude-ai --path ./export \
   --yes-i-authorize-spend-up-to 50
 
+# Skip the synthesis phase (scoring still runs; report renders deterministic
+# scaffolding + a muted banner noting narrative sections are absent).
+uv run lucid audit --source claude-ai --path ./export --no-synthesis
+
 # Run calibration against SpiralBench (stub until Phase 6)
 uv run lucid calibrate --module a
 
@@ -85,11 +89,33 @@ lucid/store/
   schema.sql              Full DDL with CHECK constraints + UNIQUE idempotency
   init.py                 initialize_db(path) — applies schema if user_version == 0
 
+lucid/run.py              Two-phase pipeline: _run_scoring_loop (det.) +
+                          run_synthesis_session (agent). AuditResult
+                          aggregates scoring + synthesis status.
+
 lucid/orchestrator/
-  managed_agent.py        Managed Agents session setup + streaming
-  tools.py                8 custom-tool async handlers (client-executed)
-  handler.py              agent.custom_tool_use event dispatcher
-  system_prompt.py        Orchestrator agent's system prompt
+  tools.py                Tool-schema registry + scoring-side custom tools
+                          (invoke_module, store_finding, query_corpus,
+                          get_conversation, get_turn_window, get_findings,
+                          log_progress, estimate_remaining_cost). Kept here
+                          for Phase 3.4 migration into lucid/synthesis/.
+
+lucid/synthesis/
+  __init__.py             SYNTHESIS_PROMPT_VERSION constant; re-exports.
+  session.py              SynthesisSession + SynthesisConfig/Handles/Outcome,
+                          MANAGED_AGENTS_BETA_HEADER.
+  run.py                  run_synthesis_session() — section loop, regen
+                          retries on unknown-id errors, upserts into
+                          report_sections.
+  handler.py              agent.custom_tool_use dispatcher + HeartbeatMonitor.
+  tools.py                build_synthesis_registry — read-only tools for the
+                          writer (get_findings, get_conversation, spot-read
+                          turns) + write_report_section (DB upsert).
+  validators.py           validate_aggregate_claims, validate_superlatives,
+                          validate_uncited_high_intensity (post-generation).
+  lifecycle.py            get_or_create_synthesis_agent +
+                          prune_stale_synthesis_agents (covers legacy
+                          lucid-orchestrator-* names for backward-compat).
 
 lucid/modules/
   base.py                 CorpusModule / FindingsModule protocols; ModuleError
@@ -120,6 +146,9 @@ prompts/                  Versioned prompt templates (markdown)
   module_e/
   module_f/
   module_h/
+  synthesis/              Opus 4.7 writer prompt (narrative sections).
+  synthesis_validator/    Sonnet post-processor prompt (deferred to post-ship
+                          polish; v1 exists but is not wired yet).
 
 tests/                    pytest
   fixtures/               Small real corpora for ingest testing
@@ -152,7 +181,7 @@ Every detection module follows the same pattern:
 2. **Has a top-level `async def run(corpus, config) -> list[Finding]` function** as its public interface.
 3. **Loads prompts from `prompts/module_<X>/<current_version>.md`**, not from hardcoded strings. The version is a config value.
 4. **Produces `Finding` objects** that populate `citation`, `detected_by`, `confidence`, and either `quote_user`/`quote_assistant` or `evidence_quotes`.
-5. **Logs progress via the orchestrator's `log_progress` tool** when running inside Managed Agents.
+5. **Logs progress via the structured `logging` module.** Modules run inside the deterministic scoring loop (`lucid.run._run_scoring_loop`), not inside an agent, so there's no `log_progress` tool to call — just `logger.info(...)` with a per-module logger name.
 6. **Handles its own errors gracefully.** One failed conversation shouldn't crash the module. Log and continue.
 
 When adding a new module, copy `module_g_attribution.py` as the skeleton (it's the simplest one) and fill in the pattern.
@@ -287,29 +316,72 @@ Enforcement is two-layer: Pydantic validates at model construction; `store/schem
 
 ## Managed Agents conventions
 
-The orchestrator runs as a Managed Agents session. Key details:
+The pipeline is split in two phases; only the synthesis phase uses Managed Agents.
 
-- Beta header: `managed-agents-2026-04-01` (exported as `MANAGED_AGENTS_BETA_HEADER`). The SDK sets it automatically; re-verify the constant if `anthropic` is bumped.
-- Orchestrator model: Sonnet 4.6 (routing work). Heavy reading happens in modules via separate Opus 4.7 calls.
-- Session lifecycle: agent definition is reusable; environments are per-run; sessions are per-audit.
-- **Corpus is NOT mounted.** The orchestrator queries the local process via custom tools (`agent.custom_tool_use` event → local handler → `user.custom_tool_result` reply). No `resources` mount on the environment, no MCP server, no HTTPS tunnel.
-- Custom-tool handlers live in `lucid/orchestrator/tools.py`: `query_corpus`, `get_conversation`, `get_turn_window`, `invoke_module`, `store_finding`, `get_findings`, `log_progress`, `estimate_remaining_cost`.
-- Event dispatcher in `lucid/orchestrator/handler.py` pattern-matches on `event.type`.
+- **Scoring phase** (`lucid.run._run_scoring_loop`): deterministic Python `for module in enabled_modules: await invoke_module_for_run(...)`. No agent. No session. No streaming. Per-turn rubric classification happens inside module code — the agent never sees a rubric decision, which is what lets SpiralBench calibration numbers stay stable across prompt-version bumps.
+- **Synthesis phase** (`lucid.synthesis.run.run_synthesis_session`): one Managed Agents session with Claude Opus 4.7 as the narrative writer. Reads the populated `findings` table; spot-reads corpus conversations via read-only custom tools; writes markdown into `report_sections` via the `write_report_section` tool.
+
+Managed Agents operational details (apply to the synthesis phase only):
+
+- Beta header: `managed-agents-2026-04-01` (exported as `lucid.synthesis.MANAGED_AGENTS_BETA_HEADER`). The SDK sets it automatically; re-verify the constant if `anthropic` is bumped.
+- Synthesis writer model: Opus 4.7 (narrative quality). The deferred Sonnet post-processor (`prompts/synthesis_validator/`) is not wired yet; current validators run in Python.
+- Session lifecycle: agent definition is reusable across runs; environments are per-run; sessions are per-audit.
+- **Corpus is NOT mounted.** The writer queries the local process via custom tools (`agent.custom_tool_use` event → local handler → `user.custom_tool_result` reply). No `resources` mount, no MCP server, no HTTPS tunnel.
+- Custom-tool handlers live in `lucid/synthesis/tools.py` (writer-side, read-only + `write_report_section`) and `lucid/orchestrator/tools.py` (scoring-side helpers like `invoke_module_for_run`; kept under `orchestrator/` for the Phase 3.4 move into `synthesis/`).
+- Event dispatcher in `lucid/synthesis/handler.py` pattern-matches on `event.type`.
 - Stream events to the CLI for real-time progress. Don't just block until completion.
-- **Race avoidance** (verified live Phase 5B, 2026-04-21): open the stream context FIRST, then IMMEDIATELY send the kickoff. Do NOT wait for a "first event" before sending — the kickoff is what triggers the first event. `ManagedAgentsSession.run()` implements the correct order: enter `beta.sessions.events.stream(session_id)`, call `events.send(user.message)`, then iterate.
-- **Handler error protocol:** custom-tool handlers return structured `{"error": "...", "message": "..."}` payloads instead of raising. `dispatch_tool_call` surfaces exceptions as `{"error": "handler_exception"}` as a safety net, but intentional errors (not_found, integrity_error, validation_error) should be returned values. One bad arg from the orchestrator must not abort the session; every handler treats the orchestrator as an untrusted caller.
-- **SDK shape gotchas** (all verified against 400-error responses on 2026-04-21 during live Phase 5B):
+- **Race avoidance** (verified live Phase 5B, 2026-04-21): open the stream context FIRST, then IMMEDIATELY send the kickoff. Do NOT wait for a "first event" before sending — the kickoff is what triggers the first event. `SynthesisSession.run()` implements the correct order: enter `beta.sessions.events.stream(session_id)`, call `events.send(user.message)`, then iterate.
+- **Handler error protocol:** custom-tool handlers return structured `{"error": "...", "message": "..."}` payloads instead of raising. `dispatch_tool_call` surfaces exceptions as `{"error": "handler_exception"}` as a safety net, but intentional errors (`not_found`, `integrity_error`, `validation_error`, `unknown_ids`) should be returned values. One bad arg from the writer must not abort the session; every handler treats the agent as an untrusted caller.
+- **SDK shape gotchas** (all verified against 400-error responses on 2026-04-21 during live Phase 5B; still apply to synthesis):
   - `client.beta.agents.create(system=...)` takes `system` as a **plain string**, NOT the messages-API list-of-blocks-with-cache_control shape. The agents runtime handles cache internally.
   - Tool `input_schema` must NOT include `additionalProperties` — the validator rejects it with "Extra inputs are not permitted". Plain JSON Schema `type: object` + `properties` + `required` only.
   - `agent.custom_tool_use` events carry `id` (not `tool_use_id`) as the correlation field. Echo that id back as `custom_tool_use_id` (not `tool_use_id`) on the `user.custom_tool_result` event. Both names appear in older MCP/messages-API code; neither works here.
   - `user.custom_tool_result.content` must be an array of content blocks (`[{"type": "text", "text": "..."}]`), not a raw string.
   - `messages.count_tokens` rejects `{"role": "user", "content": ""}` with 400; `lucid/cost.py::_turns_to_messages` skips empty-content turns and synthesizes an `"(empty conversation)"` placeholder when every turn is empty.
-- **Registry binding:** `build_tool_registry(store, audit_run_id, progress_log, remaining_budget_usd)` closes handlers over per-run context. Never register tools against a shared global; the (store, run_id) tuple must be fresh per audit so `store_finding` attaches to the right row.
-- **PROMPT_VERSION keying:** `lucid.orchestrator.system_prompt.PROMPT_VERSION` is the version string Findings carry in their `prompt_version` column. Bump it whenever `SYSTEM_PROMPT` changes or calibration numbers recorded against the old version become stale. It also keys the Managed Agents lifecycle — each orchestrator agent is named `lucid-orchestrator-v<PROMPT_VERSION>` and reused across runs; a version bump creates a new agent and the next run's `prune_stale_orchestrator_agents` sweep archives the old one.
-- **Managed Agents lifecycle:** one long-lived orchestrator agent per `PROMPT_VERSION`. `ManagedAgentsSession.run()` calls `get_or_create_orchestrator_agent` (find-first by exact name), then `prune_stale_orchestrator_agents` on every run. Per-run environments and sessions are deleted in `_teardown_ephemeral` unless `OrchestratorConfig.keep_ephemeral=True`. Stale-agent cleanup is best-effort — failures log a warning but never abort the audit. Use `lucid cleanup-agents --all` for a pre-flight wipe; the default mode only prunes stale orchestrator rows.
+- **Registry binding:** `build_synthesis_registry(store, audit_run_id, ...)` closes handlers over per-run context. Never register tools against a shared global; the `(store, run_id)` tuple must be fresh per audit so `write_report_section` attaches to the right row.
 - **Env loading at CLI import:** `lucid/cli.py` calls `_load_dotenv_files()` at import time so `ANTHROPIC_API_KEY` from `.env.local` is available without a shell `export`. Tests strip the key via `tests/conftest.py::_isolate_api_env` (session-level autouse) to guarantee no live API calls during `pytest`.
 
 If Managed Agents has friction, fall back path is the Claude Agent SDK (`claude_agent_sdk` package, v0.2.111+ for Opus 4.7 support). Same tool loop; less managed infrastructure.
+
+## Synthesis session conventions
+
+The synthesis phase runs *after* the deterministic scoring loop. It reads the `findings` table + spot-reads corpus conversations via read-only custom tools, and writes narrative report sections into the `report_sections` table.
+
+### Two-phase pipeline
+
+1. **Scoring** (`lucid.run._run_scoring_loop`): deterministic Python for-loop invoking each enabled module via `invoke_module_for_run`. No agent. Preserves calibration reproducibility — κ numbers against SpiralBench remain stable because per-turn rubric classification happens in module code, not agent reasoning.
+2. **Synthesis** (`lucid.synthesis.run.run_synthesis_session`): one Managed Agents session with Opus 4.7 as the writer. The agent writes markdown with `[F:finding_id]` / `[T:turn_id]` citation tokens via the `write_report_section` tool; every cited id is validated against the DB before persistence.
+
+### Citation contract
+
+Every factual claim in agent prose must carry an inline `[F:finding_id]` or `[T:turn_id]` token. The `write_report_section` handler rejects unknown ids with `{"error": "unknown_ids", ...}`; the agent sees the error and retries with corrected ids (capped at `max_regen_attempts=2` per section). Valid ids persist to the `report_sections` table; the Jinja2 `markdown_with_citations` filter resolves tokens to anchor links at render time.
+
+### Failure-mode guards (post-generation)
+
+Three validators run after Opus writes each section:
+
+- **Aggregate-claim lockdown** (`validate_aggregate_claims`): phrases like "across 42 conversations" are allowed only when backed by a tool-call result returning that exact count.
+- **Thin-evidence hedging** (`validate_superlatives`): superlatives ("consistently", "always", "frequently") require the cited behavior to have count >= `THIN_EVIDENCE_THRESHOLD` (default 5).
+- **Uncited high-intensity audit** (`validate_uncited_high_intensity`): findings with intensity >= 2 that don't appear in any section's `cited_finding_ids` are surfaced for the session's attention.
+
+### INSUFFICIENT_EVIDENCE contract
+
+When the agent genuinely cannot ground a section with >= 3 qualifying findings, it invokes `write_report_section` with `insufficient_evidence=true` + a `decline_reason`. The template renders "Section skipped: {reason}" instead of prose. This is analogous to Module H's `OUT_OF_SCOPE` verdict — honest decline beats hallucinated narrative.
+
+### Agent naming + lifecycle
+
+Synthesis agents are named `lucid-synthesis-v<prompt_version>` (see `lucid.synthesis.lifecycle`). Backward-compat with the deprecated `lucid-orchestrator-*` prefix is built into `prune_stale_synthesis_agents` — existing orchestrator agents on the Anthropic console are archived alongside stale synthesis agents. `lucid cleanup-agents` invokes this pruning.
+
+### Disabling synthesis
+
+`lucid audit --no-synthesis` skips the synthesis phase entirely. The report still renders but only shows deterministic scaffolding (charts, tables, evidence cards) + a muted banner noting the narrative sections are deliberately absent.
+
+### Prompt-version bumps
+
+Synthesis prompts live at `prompts/synthesis/v{N}.md` (Opus writer) and `prompts/synthesis_validator/v{N}.md` (Sonnet post-processor — deferred to post-ship polish). Bumping the version:
+1. Author `v{N+1}.md` with updated frontmatter + hash.
+2. Update `SYNTHESIS_PROMPT_VERSION` in `lucid/synthesis/__init__.py`.
+3. Next audit run creates a fresh `lucid-synthesis-v{N+1}` agent; `prune_stale_synthesis_agents` archives the old one on its next pass.
 
 ## Report + deck conventions
 
@@ -364,7 +436,7 @@ model donut. Don't introduce collisions — tests guard Fig. 4/5/6.
 3. Add citation constants at the top.
 4. Create `prompts/module_<letter>/v1.md` with frontmatter and output schema.
 5. Add the module to `ModuleName` enum in `schemas.py`.
-6. Register the module in `lucid/orchestrator/system_prompt.py` so the orchestrator knows to invoke it.
+6. Register the module in `lucid.run._run_scoring_loop`'s enabled-modules list (and `lucid/orchestrator/tools.py::invoke_module_for_run`'s dispatch table) so the deterministic scoring phase runs it.
 7. Add calibration if ground truth exists, or manual-review-based validation if not.
 
 ### Iterating a prompt
@@ -377,9 +449,9 @@ model donut. Don't introduce collisions — tests guard Fig. 4/5/6.
 
 ### Running a dry-run audit
 
-Use `--dry-run` to parse, sample, and print what *would* be sent to the orchestrator without actually invoking Managed Agents. Useful for:
+Use `--dry-run` to parse, sample, and print what *would* be scored + synthesized without actually invoking any LLM. Useful for:
 - Verifying sampling behavior
-- Estimating token budget
+- Estimating token budget (per-module + synthesis-phase breakdown)
 - Catching ingest errors without burning LLM credits
 
 ### Handling a new Claude.ai export
@@ -398,7 +470,7 @@ If a user reports their export doesn't parse:
 
 **Don't hardcode API keys.** Load from environment. `ANTHROPIC_API_KEY` is the canonical name.
 
-**Don't assume the orchestrator completes successfully.** Managed Agents is beta. Handle timeouts, partial failures, rate limits. Checkpoint findings to SQLite continuously so a failure mid-run doesn't lose work.
+**Don't assume the synthesis session completes successfully.** Managed Agents is beta. Handle timeouts, partial failures, rate limits. Scoring-phase findings checkpoint to SQLite as each module completes; a mid-synthesis failure loses the incomplete section only — the report still renders with completed sections + deterministic scaffolding.
 
 **Don't invent findings.** If a module gets an ambiguous response from the judge, mark it as `confidence < 0.5` and continue. Never upscale confidence to make a finding "feel" stronger.
 
