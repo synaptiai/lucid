@@ -1,4 +1,4 @@
-"""Tests for :mod:`lucid.orchestrator.lifecycle` — version-keyed agent reuse."""
+"""Tests for :mod:`lucid.synthesis.lifecycle` — version-keyed agent reuse."""
 
 from __future__ import annotations
 
@@ -7,18 +7,23 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lucid.orchestrator import lifecycle
-from lucid.orchestrator.lifecycle import (
-    LUCID_ORCHESTRATOR_PREFIX,
-    PROMPT_VERSION,
+from lucid.synthesis import lifecycle
+from lucid.synthesis.lifecycle import (
+    LUCID_LEGACY_PREFIXES,
+    LUCID_SYNTHESIS_PREFIX,
     archive_agents,
     classify_agent,
-    current_orchestrator_agent_name,
-    get_or_create_orchestrator_agent,
+    current_synthesis_agent_name,
+    get_or_create_synthesis_agent,
     iter_lucid_agents,
-    prune_stale_orchestrator_agents,
+    prune_stale_synthesis_agents,
     wipe_all_lucid_agents,
 )
+
+# A test-only stand-in for the (Phase 4.2) SYNTHESIS_PROMPT_VERSION.
+# Keeps the assertions version-agnostic while the constant lives only
+# as a CLI-passed literal.
+_TEST_VERSION = "v1"
 
 
 def _agent(name: str, agent_id: str = "") -> MagicMock:
@@ -61,106 +66,146 @@ def _client_with_agents(agents: list[Any], archive_raises_on: set[str] | None = 
 # ---------------------------------------------------------------------------
 
 
-def test_current_orchestrator_name_uses_prompt_version() -> None:
-    assert current_orchestrator_agent_name() == f"{LUCID_ORCHESTRATOR_PREFIX}{PROMPT_VERSION}"
+def test_current_synthesis_name_uses_prompt_version() -> None:
+    assert current_synthesis_agent_name("v2") == f"{LUCID_SYNTHESIS_PREFIX}v2"
+    assert current_synthesis_agent_name(_TEST_VERSION) == f"{LUCID_SYNTHESIS_PREFIX}{_TEST_VERSION}"
 
 
 def test_classify_agent_current_stale_foreign() -> None:
-    current = _agent(current_orchestrator_agent_name())
-    stale = _agent(f"{LUCID_ORCHESTRATOR_PREFIX}v0")
+    current = _agent(current_synthesis_agent_name(_TEST_VERSION))
+    stale_syn = _agent(f"{LUCID_SYNTHESIS_PREFIX}v0")
+    # Legacy orchestrator names count as stale — backcompat for Phase 3 prune.
+    stale_legacy = _agent("lucid-orchestrator-v2")
     foreign = _agent("lucid-smoke-1")
-    assert classify_agent(current) == "current"
-    assert classify_agent(stale) == "stale"
-    assert classify_agent(foreign) == "foreign"
+    assert classify_agent(current, current_prompt_version=_TEST_VERSION) == "current"
+    assert classify_agent(stale_syn, current_prompt_version=_TEST_VERSION) == "stale"
+    assert classify_agent(stale_legacy, current_prompt_version=_TEST_VERSION) == "stale"
+    assert classify_agent(foreign, current_prompt_version=_TEST_VERSION) == "foreign"
 
 
 def test_iter_lucid_agents_filters_non_lucid_names() -> None:
     agents = [
-        _agent("lucid-orchestrator-v2"),
+        _agent("lucid-synthesis-v2"),
         _agent("some-other-agent"),
         _agent("lucid-smoke-run-1"),
     ]
     client = _client_with_agents(agents)
     names = sorted(a.name for a in iter_lucid_agents(client))
-    assert names == ["lucid-orchestrator-v2", "lucid-smoke-run-1"]
+    assert names == ["lucid-smoke-run-1", "lucid-synthesis-v2"]
 
 
 def test_iter_lucid_agents_tolerates_agents_without_name() -> None:
     anon = MagicMock()
     anon.name = None
     anon.id = "ag_anon"
-    client = _client_with_agents([anon, _agent("lucid-orchestrator-v2")])
+    client = _client_with_agents([anon, _agent("lucid-synthesis-v2")])
     names = [a.name for a in iter_lucid_agents(client)]
-    assert names == ["lucid-orchestrator-v2"]
+    assert names == ["lucid-synthesis-v2"]
 
 
 # ---------------------------------------------------------------------------
-# get_or_create_orchestrator_agent
+# get_or_create_synthesis_agent
 # ---------------------------------------------------------------------------
 
 
 def test_get_or_create_reuses_existing_agent() -> None:
-    existing = _agent(current_orchestrator_agent_name(), agent_id="ag_existing")
+    existing = _agent(current_synthesis_agent_name(_TEST_VERSION), agent_id="ag_existing")
     client = _client_with_agents([existing])
-    agent_id = get_or_create_orchestrator_agent(
-        client, model="claude-sonnet-4-6", system_prompt="hi", tools=[]
+    agent_id = get_or_create_synthesis_agent(
+        client,
+        model="claude-sonnet-4-6",
+        system_prompt="hi",
+        tools=[],
+        prompt_version=_TEST_VERSION,
     )
     assert agent_id == "ag_existing"
     assert client.beta.agents.create.call_count == 0
 
 
 def test_get_or_create_creates_when_no_match() -> None:
-    client = _client_with_agents([_agent("lucid-orchestrator-v0")])
-    agent_id = get_or_create_orchestrator_agent(
-        client, model="claude-sonnet-4-6", system_prompt="hi", tools=[]
+    client = _client_with_agents([_agent("lucid-synthesis-v0")])
+    agent_id = get_or_create_synthesis_agent(
+        client,
+        model="claude-sonnet-4-6",
+        system_prompt="hi",
+        tools=[],
+        prompt_version=_TEST_VERSION,
     )
-    assert agent_id == f"ag_created_{current_orchestrator_agent_name()}"
+    assert agent_id == f"ag_created_{current_synthesis_agent_name(_TEST_VERSION)}"
     client.beta.agents.create.assert_called_once()
     kwargs = client.beta.agents.create.call_args.kwargs
-    assert kwargs["name"] == current_orchestrator_agent_name()
+    assert kwargs["name"] == current_synthesis_agent_name(_TEST_VERSION)
     assert kwargs["model"] == "claude-sonnet-4-6"
 
 
 # ---------------------------------------------------------------------------
-# prune_stale_orchestrator_agents
+# prune_stale_synthesis_agents
 # ---------------------------------------------------------------------------
 
 
-def test_prune_stale_archives_only_old_orchestrator_versions() -> None:
+def test_prune_stale_archives_only_old_synthesis_versions() -> None:
     agents = [
-        _agent(current_orchestrator_agent_name(), agent_id="ag_current"),
-        _agent(f"{LUCID_ORCHESTRATOR_PREFIX}v0", agent_id="ag_v0"),
-        _agent(f"{LUCID_ORCHESTRATOR_PREFIX}v1", agent_id="ag_v1"),
+        _agent(current_synthesis_agent_name(_TEST_VERSION), agent_id="ag_current"),
+        _agent(f"{LUCID_SYNTHESIS_PREFIX}v0", agent_id="ag_v0"),
+        _agent(f"{LUCID_SYNTHESIS_PREFIX}v99", agent_id="ag_v99"),
         _agent("lucid-smoke-1", agent_id="ag_smoke"),
     ]
     client = _client_with_agents(agents)
-    result = prune_stale_orchestrator_agents(client)
-    assert set(result.keys()) == {"ag_v0", "ag_v1"}
+    result = prune_stale_synthesis_agents(client, current_prompt_version=_TEST_VERSION)
+    assert set(result.keys()) == {"ag_v0", "ag_v99"}
     assert all(status == "ok" for status in result.values())
     archived_ids = {call.args[0] for call in client.beta.agents.archive.call_args_list}
-    assert archived_ids == {"ag_v0", "ag_v1"}
+    assert archived_ids == {"ag_v0", "ag_v99"}
+
+
+def test_prune_stale_archives_legacy_orchestrator_agents_too() -> None:
+    """Backcompat: legacy ``lucid-orchestrator-*`` agents on the console
+    must be archived by the same prune pass that kills stale synthesis
+    agents.
+
+    Keeps the current synthesis agent intact; archives BOTH a stale
+    ``lucid-synthesis-v0`` AND a legacy ``lucid-orchestrator-v2``.
+    """
+    agents = [
+        _agent(current_synthesis_agent_name(_TEST_VERSION), agent_id="ag_current"),
+        _agent(f"{LUCID_SYNTHESIS_PREFIX}v0", agent_id="ag_syn_v0"),
+        _agent("lucid-orchestrator-v2", agent_id="ag_legacy_v2"),
+        _agent("lucid-orchestrator-v3", agent_id="ag_legacy_v3"),
+        _agent("lucid-smoke-1", agent_id="ag_smoke"),
+    ]
+    client = _client_with_agents(agents)
+    result = prune_stale_synthesis_agents(client, current_prompt_version=_TEST_VERSION)
+    assert set(result.keys()) == {"ag_syn_v0", "ag_legacy_v2", "ag_legacy_v3"}
+    assert all(status == "ok" for status in result.values())
+    archived_ids = {call.args[0] for call in client.beta.agents.archive.call_args_list}
+    assert archived_ids == {"ag_syn_v0", "ag_legacy_v2", "ag_legacy_v3"}
+
+
+def test_legacy_prefixes_still_wired() -> None:
+    # Guard against someone silently dropping the backcompat tuple.
+    assert "lucid-orchestrator-" in LUCID_LEGACY_PREFIXES
 
 
 def test_prune_stale_is_noop_when_only_current_and_foreign() -> None:
     agents = [
-        _agent(current_orchestrator_agent_name(), agent_id="ag_current"),
+        _agent(current_synthesis_agent_name(_TEST_VERSION), agent_id="ag_current"),
         _agent("lucid-smoke-1", agent_id="ag_smoke"),
     ]
     client = _client_with_agents(agents)
-    result = prune_stale_orchestrator_agents(client)
+    result = prune_stale_synthesis_agents(client, current_prompt_version=_TEST_VERSION)
     assert result == {}
     assert client.beta.agents.archive.call_count == 0
 
 
 def test_prune_stale_collects_archive_errors() -> None:
     agents = [
-        _agent(f"{LUCID_ORCHESTRATOR_PREFIX}v0", agent_id="ag_v0"),
-        _agent(f"{LUCID_ORCHESTRATOR_PREFIX}v1", agent_id="ag_v1"),
+        _agent(f"{LUCID_SYNTHESIS_PREFIX}v0", agent_id="ag_v0"),
+        _agent(f"{LUCID_SYNTHESIS_PREFIX}v99", agent_id="ag_v99"),
     ]
-    client = _client_with_agents(agents, archive_raises_on={"ag_v1"})
-    result = prune_stale_orchestrator_agents(client)
+    client = _client_with_agents(agents, archive_raises_on={"ag_v99"})
+    result = prune_stale_synthesis_agents(client, current_prompt_version=_TEST_VERSION)
     assert result["ag_v0"] == "ok"
-    assert result["ag_v1"].startswith("error: RuntimeError")
+    assert result["ag_v99"].startswith("error: RuntimeError")
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +215,8 @@ def test_prune_stale_collects_archive_errors() -> None:
 
 def test_wipe_all_archives_every_lucid_prefixed_agent() -> None:
     agents = [
-        _agent(current_orchestrator_agent_name(), agent_id="ag_current"),
-        _agent(f"{LUCID_ORCHESTRATOR_PREFIX}v0", agent_id="ag_v0"),
+        _agent(current_synthesis_agent_name(_TEST_VERSION), agent_id="ag_current"),
+        _agent(f"{LUCID_SYNTHESIS_PREFIX}v0", agent_id="ag_v0"),
         _agent("lucid-smoke-1", agent_id="ag_smoke"),
         _agent("unrelated-agent", agent_id="ag_unrelated"),
     ]
@@ -185,7 +230,7 @@ def test_wipe_all_archives_every_lucid_prefixed_agent() -> None:
 
 def test_wipe_all_dry_run_does_not_mutate() -> None:
     agents = [
-        _agent(current_orchestrator_agent_name(), agent_id="ag_current"),
+        _agent(current_synthesis_agent_name(_TEST_VERSION), agent_id="ag_current"),
         _agent("lucid-smoke-1", agent_id="ag_smoke"),
     ]
     client = _client_with_agents(agents)
@@ -225,10 +270,16 @@ def test_archive_agents_empty_input_noop() -> None:
 
 @pytest.fixture
 def fake_client_with_agents(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    """Patch the CLI's client factory to return a controlled client."""
+    """Patch the CLI's client factory to return a controlled client.
+
+    The CLI currently hard-codes ``"v1"`` as the synthesis prompt
+    version (until Phase 4.2 ships ``SYNTHESIS_PROMPT_VERSION``); the
+    fixture mirrors that so the "current" agent name aligns.
+    """
+    cli_prompt_version = "v1"
     agents: list[Any] = [
-        _agent(current_orchestrator_agent_name(), agent_id="ag_current"),
-        _agent(f"{LUCID_ORCHESTRATOR_PREFIX}v0", agent_id="ag_v0"),
+        _agent(current_synthesis_agent_name(cli_prompt_version), agent_id="ag_current"),
+        _agent(f"{LUCID_SYNTHESIS_PREFIX}v0", agent_id="ag_v0"),
         _agent("lucid-smoke-1", agent_id="ag_smoke"),
     ]
     client = _client_with_agents(agents)

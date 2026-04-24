@@ -365,9 +365,10 @@ def cleanup_agents(
         typer.Option(
             "--all",
             help=(
-                "Archive every lucid-* agent, not just stale orchestrator versions. "
-                "Use for a pre-flight clean slate; default mode prunes only stale "
-                "orchestrators so current-version agents keep their warm cache."
+                "Archive every lucid-* agent, not just stale synthesis versions. "
+                "Use for a pre-flight clean slate; default mode prunes stale "
+                "synthesis agents (and any legacy lucid-orchestrator-* rows) so "
+                "current-version agents keep their warm cache."
             ),
         ),
     ] = False,
@@ -393,19 +394,26 @@ def cleanup_agents(
 ) -> None:
     """Prune Managed Agents registered in your Anthropic account.
 
-    Default behaviour archives only stale orchestrator agents whose prompt
-    version no longer matches the code. Pass ``--all`` for a full sweep of
-    every ``lucid-*`` agent (the pre-flight wipe before a clean run). Use
-    ``--dry-run`` first if you want to preview the list.
+    Default behaviour archives stale synthesis agents whose prompt
+    version no longer matches the code, plus any legacy
+    ``lucid-orchestrator-*`` agents left on the console from before
+    Phase 3. Pass ``--all`` for a full sweep of every ``lucid-*`` agent
+    (the pre-flight wipe before a clean run). Use ``--dry-run`` first
+    if you want to preview the list.
     """
     configure_logging(log_level)
 
-    from lucid.orchestrator.lifecycle import (
+    from lucid.synthesis.lifecycle import (
         classify_agent,
-        current_orchestrator_agent_name,
+        current_synthesis_agent_name,
         iter_lucid_agents,
         wipe_all_lucid_agents,
     )
+
+    # TODO(phase-4.2): import SYNTHESIS_PROMPT_VERSION from
+    # prompts/synthesis/ once the v1 prompt lands. Until then, the CLI
+    # hard-codes "v1" so prune keeps the current agent alive.
+    current_prompt_version = "v1"
 
     try:
         sync_client, _ = _build_anthropic_clients_or_exit()
@@ -418,9 +426,15 @@ def cleanup_agents(
         _CONSOLE.print("[green]No lucid-* agents registered. Nothing to do.[/green]")
         return
 
-    target_name = current_orchestrator_agent_name()
+    target_name = current_synthesis_agent_name(current_prompt_version)
     target_agents: list[Any] = (
-        list(agents) if all_ else [a for a in agents if classify_agent(a) == "stale"]
+        list(agents)
+        if all_
+        else [
+            a
+            for a in agents
+            if classify_agent(a, current_prompt_version=current_prompt_version) == "stale"
+        ]
     )
 
     table = Table(title=f"lucid-* agents ({len(agents)} total)", show_lines=False)
@@ -431,7 +445,7 @@ def cleanup_agents(
 
     target_ids = {str(a.id) for a in target_agents}
     for agent in agents:
-        kind = classify_agent(agent)
+        kind = classify_agent(agent, current_prompt_version=current_prompt_version)
         is_target = str(agent.id) in target_ids
         action = (
             "would-archive"
@@ -465,7 +479,8 @@ def cleanup_agents(
             _CONSOLE.print("[green]No lucid-* agents to archive (list is already empty).[/green]")
         else:
             _CONSOLE.print(
-                f"[green]No stale agents. Current orchestrator ({target_name}) is the only one.[/green]"
+                f"[green]No stale or legacy agents. Current synthesis agent ({target_name}) "
+                "is the only one.[/green]"
             )
         return
 
@@ -490,7 +505,7 @@ def cleanup_agents(
     else:
         # Reuse the archive path from wipe_all_lucid_agents by filtering the
         # in-flight list to stale ids only — keeps a single mutation codepath.
-        from lucid.orchestrator.lifecycle import archive_agents
+        from lucid.synthesis.lifecycle import archive_agents
 
         stale_ids = [str(a.id) for a in target_agents]
         status_map = archive_agents(sync_client, stale_ids)
