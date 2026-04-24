@@ -10,6 +10,7 @@ import pytest
 from lucid.orchestrator import lifecycle
 from lucid.orchestrator.lifecycle import (
     LUCID_ORCHESTRATOR_PREFIX,
+    PROMPT_VERSION,
     archive_agents,
     classify_agent,
     current_orchestrator_agent_name,
@@ -18,7 +19,6 @@ from lucid.orchestrator.lifecycle import (
     prune_stale_orchestrator_agents,
     wipe_all_lucid_agents,
 )
-from lucid.orchestrator.system_prompt import PROMPT_VERSION
 
 
 def _agent(name: str, agent_id: str = "") -> MagicMock:

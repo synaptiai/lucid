@@ -14,6 +14,14 @@ of anthropic-sdk 0.96.
 
 The public surface also exposes :func:`wipe_all_lucid_agents` for a
 one-shot cleanup from the CLI (``lucid cleanup-agents``).
+
+.. note::
+   ``PROMPT_VERSION`` used to live in ``lucid.orchestrator.system_prompt``
+   alongside the retired Managed-Agents orchestrator prompt. The scoring
+   loop replaces the orchestrator session, so ``system_prompt.py`` is
+   deleted; the version constant is inlined here solely to drive the
+   agent-naming scheme until this module migrates to
+   ``lucid/synthesis/`` in Phase 3.
 """
 
 from __future__ import annotations
@@ -22,10 +30,13 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
-from lucid.orchestrator.system_prompt import PROMPT_VERSION
-
 _LOGGER = logging.getLogger(__name__)
 
+
+# Kept as a module-level constant (not read from system_prompt.py, which
+# is deleted) so the existing ``lucid-orchestrator-v<N>`` agents on the
+# Anthropic console remain reachable for pruning in Phase 3.
+PROMPT_VERSION = "v3"
 
 LUCID_AGENT_NAME_PREFIX = "lucid-"
 LUCID_ORCHESTRATOR_PREFIX = "lucid-orchestrator-"

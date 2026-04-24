@@ -1,22 +1,24 @@
 """Managed Agents orchestrator package.
 
+Legacy home for tool schemas, the custom-tool dispatcher, and the
+agent-lifecycle helpers. The orchestrator session itself is gone — the
+deterministic scoring loop in :mod:`lucid.run` invokes modules directly.
+Phase 3 of the synthesis-agent refactor will move ``handler``,
+``lifecycle``, and the read-only tool handlers into ``lucid/synthesis/``.
+
 Public surface:
-- `ToolRegistry` + `CustomTool` — declarative tool schemas matching the
-  Managed Agents `{"type": "custom", "name": "...", ...}` shape.
-- `build_tool_registry(store, cost_estimator, run_id)` — constructs the
-  registry with bound handlers for a given audit run.
-- `dispatch_tool_call(registry, name, args)` — run a single tool call.
-- `SYSTEM_PROMPT` — routing prompt for the Opus 4.7 orchestrator.
-  Delivered as a plain string to `beta.agents.create`; the Managed
-  Agents runtime handles prompt caching internally, so no explicit
-  `cache_control` / padding applies at this layer.
+- :class:`ToolRegistry` + :class:`CustomTool` — declarative tool schemas
+  matching the Managed Agents ``{"type": "custom", "name": "...", ...}``
+  shape.
+- :func:`build_tool_registry` — constructs the registry with bound
+  handlers for a given audit run.
+- :func:`dispatch_tool_call` — run a single tool call.
 """
 
 from lucid.orchestrator.handler import (
     ToolDispatchError,
     dispatch_tool_call,
 )
-from lucid.orchestrator.system_prompt import SYSTEM_PROMPT
 from lucid.orchestrator.tools import (
     CustomTool,
     ToolHandler,
@@ -25,7 +27,6 @@ from lucid.orchestrator.tools import (
 )
 
 __all__ = [
-    "SYSTEM_PROMPT",
     "CustomTool",
     "ToolDispatchError",
     "ToolHandler",
