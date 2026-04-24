@@ -2,7 +2,7 @@
 
 Runs AFTER the deterministic scoring phase. Spins up one
 :class:`SynthesisSession` per audit run, kicks off Opus 4.7 writing
-via the ``synthesis/v1`` prompt, collects the persisted
+via the ``synthesis/<SYNTHESIS_PROMPT_VERSION>`` prompt, collects the persisted
 :class:`~lucid.schemas.ReportSection` rows, and applies post-generation
 validators (aggregate-claim lockdown, superlative hedging,
 uncited-high-intensity audit).
@@ -172,7 +172,8 @@ async def run_synthesis_session(
 
     1. Builds the read-only + ``write_report_section`` tool registry
        with a per-section retry cap (Task 5.4).
-    2. Loads ``prompts/synthesis/v1.md`` as the writer's system prompt.
+    2. Loads ``prompts/synthesis/<SYNTHESIS_PROMPT_VERSION>.md`` as the
+       writer's system prompt.
     3. Spins up :class:`SynthesisSession`; runs it until idle/stalled.
     4. Reads back the persisted :class:`~lucid.schemas.ReportSection`
        rows.
@@ -205,7 +206,7 @@ async def run_synthesis_session(
     # hard stop for the phase, but must not abort the overall audit
     # (the scoring findings are already persisted and render-able).
     try:
-        prompt = load_prompt("synthesis", "v1")
+        prompt = load_prompt("synthesis", SYNTHESIS_PROMPT_VERSION)
     except Exception as err:
         _LOGGER.exception("synthesis prompt load failed")
         result.reason = f"prompt_load_failed: {err}"

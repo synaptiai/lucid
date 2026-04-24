@@ -24,7 +24,7 @@ from lucid.synthesis.tools import build_synthesis_registry
 # (``lucid-synthesis-v<SYNTHESIS_PROMPT_VERSION>``) so a prompt bump
 # forces a new agent. Bump in lockstep with the prompt file's
 # ``version`` frontmatter when shipping a prompt revision.
-SYNTHESIS_PROMPT_VERSION = "v1"
+SYNTHESIS_PROMPT_VERSION = "v2"
 
 # ``run`` is imported lazily (below) to avoid a circular import:
 # lucid.synthesis.run imports lucid.synthesis.SYNTHESIS_PROMPT_VERSION

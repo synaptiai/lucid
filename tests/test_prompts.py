@@ -61,8 +61,33 @@ def test_synthesis_validator_v1_prompt_padding_hits_sonnet_cache_threshold() -> 
     assert len(body) >= 2048 * 3
 
 
+def test_synthesis_v2_prompt_loads() -> None:
+    """The v2 synthesis writer prompt loads with updated frontmatter.
+
+    v2 reshapes the execution framing to prevent the "informational
+    session" failure mode (agent emits prose text between tool calls,
+    triggering session.status_idle before any section is written).
+    Model + sampling-param contract is unchanged from v1.
+    """
+    prompt = load_prompt("synthesis", "v2")
+    assert prompt.version == "v2"
+    assert prompt.model == "claude-opus-4-7"
+    assert prompt.frontmatter.get("thinking_mode") in {"disabled", "adaptive"}
+    assert prompt.frontmatter.get("effort") in {"low", "medium", "high", "xhigh", "max"}
+    # Opus 4.7 rejects temperature — frontmatter must not set it.
+    assert "temperature" not in prompt.frontmatter
+
+
+def test_synthesis_v2_prompt_padding_hits_opus_cache_threshold() -> None:
+    """v2 padded_body must be >= 4096 tokens for Opus cache activation."""
+    prompt = load_prompt("synthesis", "v2")
+    body = prompt.padded_body
+    # Rough tokens-to-chars heuristic: 1 token ~ 3 chars (conservative).
+    assert len(body) >= 4096 * 3
+
+
 def test_synthesis_prompt_version_constant() -> None:
     """``SYNTHESIS_PROMPT_VERSION`` is exported and matches the shipped prompt."""
     from lucid.synthesis import SYNTHESIS_PROMPT_VERSION
 
-    assert SYNTHESIS_PROMPT_VERSION == "v1"
+    assert SYNTHESIS_PROMPT_VERSION == "v2"

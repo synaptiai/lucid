@@ -218,6 +218,48 @@ class SynthesisSession:
                     event.get("type") if isinstance(event, dict) else None
                 )
 
+                # Diagnostic: log every event type seen at INFO so post-mortems can
+                # tell the difference between "session idled because agent emitted
+                # text" vs "stream exhausted" vs "session.finished cleanly". Costs
+                # one log line per event; outweighed by the debugging signal when
+                # a session underdelivers (e.g. 2 tool_calls + 0 sections).
+                _LOGGER.info("synthesis event #%d: %s", outcome.events_received, evt_type)
+
+                # When the agent emits text (agent.text / agent.message / similar),
+                # capture the first 80 chars as a preview — agent-emitted text
+                # between tool calls is the classic "informational session"
+                # anti-pattern. Enough to diagnose without dumping corpus content.
+                if evt_type and (
+                    "text" in str(evt_type).lower() or "message" in str(evt_type).lower()
+                ):
+                    text_preview = ""
+                    # Try common shapes: event.text, event.content[0].text, event.delta.text
+                    for attr in ("text", "delta"):
+                        val = getattr(event, attr, None)
+                        if isinstance(val, str) and val:
+                            text_preview = val[:80]
+                            break
+                        inner_text = getattr(val, "text", None) if val is not None else None
+                        if isinstance(inner_text, str) and inner_text:
+                            text_preview = inner_text[:80]
+                            break
+                    # Also try .content as a list of blocks
+                    content = getattr(event, "content", None)
+                    if not text_preview and isinstance(content, list) and content:
+                        first_block = content[0]
+                        block_text = getattr(first_block, "text", None)
+                        if isinstance(block_text, str) and block_text:
+                            text_preview = block_text[:80]
+                    if text_preview:
+                        _LOGGER.warning(
+                            "synthesis agent emitted text (preview, 80 chars): %r",
+                            text_preview,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "synthesis agent emitted %s event (no text captured)", evt_type
+                        )
+
                 if evt_type == "agent.custom_tool_use":
                     outcome.tool_calls += 1
                     tool_name = getattr(event, "name", None) or (
@@ -298,6 +340,13 @@ class SynthesisSession:
             outcome.diagnostics.append(stall_reason[0])
         elif not outcome.completed:
             outcome.reason = "stream_exhausted"
+        _LOGGER.info(
+            "synthesis outcome: completed=%s reason=%s tool_calls=%d events=%d",
+            outcome.completed,
+            outcome.reason,
+            outcome.tool_calls,
+            outcome.events_received,
+        )
         return outcome
 
     def _teardown_ephemeral(self, handles: SynthesisHandles, outcome: SynthesisOutcome) -> None:
