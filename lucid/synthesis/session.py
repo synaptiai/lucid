@@ -58,7 +58,11 @@ class SynthesisConfig:
     boundary; until then, whoever constructs the config owns the value).
 
     ``heartbeat_stall_seconds`` is the silence threshold that marks a
-    session as stalled; set to ``0`` to disable the watchdog.
+    session as stalled; set to ``0`` to disable the watchdog. Default
+    300s covers Opus 4.7's legitimate long-running turns (e.g. writing
+    a 500-word section with effort=high can take 2-3 minutes of quiet
+    stream time). Tighter thresholds (60s) caused false-positive
+    stalls on live run-14ff069a186b while the agent was mid-generation.
     ``heartbeat_check_interval_seconds`` is the watchdog's poll cadence.
 
     ``keep_ephemeral=True`` skips session + environment teardown for
@@ -70,8 +74,8 @@ class SynthesisConfig:
     system_prompt: str
     model: str = "claude-opus-4-7"
     session_timeout_seconds: float = 3600.0
-    heartbeat_stall_seconds: float = 60.0
-    heartbeat_check_interval_seconds: float = 5.0
+    heartbeat_stall_seconds: float = 300.0
+    heartbeat_check_interval_seconds: float = 10.0
     keep_ephemeral: bool = False
 
 
