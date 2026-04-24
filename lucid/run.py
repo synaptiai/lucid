@@ -52,7 +52,12 @@ from lucid.orchestrator.managed_agent import (
     OrchestratorConfig,
     SessionOutcome,
 )
-from lucid.orchestrator.tools import ToolRegistry, build_tool_registry, run_attribution_safety_net
+from lucid.orchestrator.tools import (
+    ToolRegistry,
+    build_tool_registry,
+    invoke_module_for_run,
+    run_attribution_safety_net,
+)
 from lucid.report.generator import write_deck, write_report
 from lucid.schemas import (
     AuditRun,
@@ -482,6 +487,61 @@ def run_audit(
         )
     finally:
         lock.release()
+
+
+async def _run_scoring_loop(
+    *,
+    store: CorpusStore,
+    audit_run_id: str,
+    enabled_modules: list[ModuleName],
+    sampled_ids: list[str],
+    progress_log: Callable[[str, str], None],
+    anthropic_client: AsyncAnthropic | None,
+    embedding_provider: EmbeddingProvider | None,
+    allow_module_d: bool,
+    per_module_usd: dict[ModuleName, float],
+    debited_modules: set[ModuleName],
+    spend_tracker: dict[str, float],
+) -> list[dict[str, Any]]:
+    """Deterministically invoke each enabled module over the sampled ids.
+
+    Replaces the Managed Agents orchestrator session. Modules run
+    sequentially — each module's own fan-out concurrency is internal
+    (bounded by its own semaphores, see e.g. Module H). Returns the
+    per-module result dicts that ``invoke_module_for_run`` produced,
+    in the order the caller supplied ``enabled_modules``.
+
+    This function performs no error recovery: a raised exception from
+    ``invoke_module_for_run`` propagates to the caller (the scoring
+    loop's job is to invoke; the audit-run status transition is the
+    caller's responsibility). Per-conversation / per-turn failures
+    inside modules are already captured as ``ModuleError`` entries in
+    ``_persist_findings`` and surface in the result dict's
+    ``module_errors`` key — those are NOT raised.
+
+    The ``progress_log("INFO", "Running module X")`` line is emitted
+    before each invocation. The module itself will emit additional
+    progress messages (start + completion) via
+    ``invoke_module_for_run``.
+    """
+    results: list[dict[str, Any]] = []
+    for module in enabled_modules:
+        progress_log("INFO", f"Running module {module.value}")
+        result = await invoke_module_for_run(
+            module=module,
+            conversation_ids=sampled_ids,
+            store=store,
+            audit_run_id=audit_run_id,
+            anthropic_client=anthropic_client,
+            embedding_provider=embedding_provider,
+            allow_module_d=allow_module_d,
+            progress_log=progress_log,
+            per_module_usd=per_module_usd,
+            debited_modules=debited_modules,
+            spend_tracker=spend_tracker,
+        )
+        results.append(result)
+    return results
 
 
 async def _execute_session_and_safety_net(
