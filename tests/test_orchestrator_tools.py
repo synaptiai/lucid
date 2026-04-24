@@ -231,6 +231,42 @@ async def test_invoke_module_g_runs_without_client(tmp_path: Path) -> None:
     store.close()
 
 
+async def test_invoke_module_for_run_direct_call_module_g(tmp_path: Path) -> None:
+    """Calling ``invoke_module_for_run`` directly (no registry wrapper)
+    produces the same completed status + findings_stored response the
+    tool closure produces. This is the entry point Task 2.2's
+    deterministic scoring loop uses — verify it works standalone."""
+    from lucid.orchestrator.tools import invoke_module_for_run
+
+    store, run_id = _seed_store(tmp_path)
+
+    progress_calls: list[tuple[str, str]] = []
+
+    def _progress(level: str, message: str) -> None:
+        progress_calls.append((level, message))
+
+    result = await invoke_module_for_run(
+        module=ModuleName.G_ATTRIBUTION,
+        conversation_ids=["c-1"],
+        store=store,
+        audit_run_id=run_id,
+        anthropic_client=None,  # Module G is deterministic, no LLM
+        embedding_provider=None,
+        allow_module_d=False,
+        progress_log=_progress,
+        per_module_usd={},
+        debited_modules=set(),
+        spend_tracker={"accrued_usd": 0.0, "budget_usd": 100.0},
+    )
+
+    assert result["status"] == "completed"
+    assert "findings_stored" in result
+    assert result["findings_stored"] >= 1
+    assert result["module_errors"] == []
+    assert any("invoke_module(G)" in msg for _, msg in progress_calls)
+    store.close()
+
+
 async def test_invoke_module_g_idempotent_on_second_call(tmp_path: Path) -> None:
     """Running Module G twice against the same conversation should leave
     the findings count unchanged — the UNIQUE key blocks the second
