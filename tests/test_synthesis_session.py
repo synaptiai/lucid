@@ -249,8 +249,9 @@ async def test_synthesis_session_dispatches_custom_tool_calls(tmp_path: Path) ->
 async def test_synthesis_session_counts_write_report_section(tmp_path: Path) -> None:
     """A successful ``write_report_section`` increments ``sections_written``.
 
-    The stub handler returns ``{"ok": True, "stub": True, "args_received": [...]}``.
-    With ``insufficient_evidence`` absent, that counts as a written section.
+    The real handler (Task 5.1) validates cited_finding_ids against the
+    findings table, so we send a declined section — it persists without
+    requiring a real finding row.
     """
     events: list[dict[str, Any]] = [
         {"type": "session.status_active"},
@@ -259,8 +260,8 @@ async def test_synthesis_session_counts_write_report_section(tmp_path: Path) -> 
             "name": "write_report_section",
             "input": {
                 "section_id": "exec_summary",
-                "markdown": "Body [F:f001].",
-                "cited_finding_ids": ["f001"],
+                "insufficient_evidence": True,
+                "decline_reason": "No qualifying findings in the sample.",
             },
             "id": "tu-write",
         },
@@ -274,8 +275,9 @@ async def test_synthesis_session_counts_write_report_section(tmp_path: Path) -> 
         session = _make_session(client, store, run_id)
         outcome = await session.run(kickoff_message="Write the report")
         assert outcome.tool_calls == 1
-        assert outcome.sections_written == 1
-        assert outcome.sections_declined == 0
+        # insufficient_evidence=True counts as declined, not written.
+        assert outcome.sections_written == 0
+        assert outcome.sections_declined == 1
     finally:
         store.close()
 
