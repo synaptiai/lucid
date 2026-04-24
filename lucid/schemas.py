@@ -422,7 +422,7 @@ class SynthesisBlock(BaseModel):
     markdown with inline [F:finding_id] / [T:turn_id] tokens and
     structures each claim into a block with explicit citation lists.
     Validated at render time — every id must exist in the DB; blocks
-    whose aggregates_support don't match actual counts are flagged.
+    whose aggregate_support doesn't match actual counts are flagged.
     """
 
     model_config = ConfigDict(extra="forbid")

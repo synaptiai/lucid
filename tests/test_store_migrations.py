@@ -66,11 +66,13 @@ def _seed_v1_db(tmp_path: Path) -> Path:
 
     Since schema.sql carries the full current state (v3), we roll the
     shape back to v1 so the migrations we replay do real work:
-    ``report_sections`` is introduced by m_002 (dropped here), and
-    m_003 adds ``blocks_json`` / ``citation_confidence`` (dropped here
-    too — SQLite 3.35+ supports ``ALTER TABLE DROP COLUMN``). After
-    this, the DB has the v1 shape; ``PRAGMA user_version = 1`` pins
-    the replay entry point.
+    ``report_sections`` is introduced by m_002, and m_003 extends it
+    with ``blocks_json`` / ``citation_confidence``. To sidestep both
+    the DROP COLUMN minimum-version requirement and the non-idempotency
+    of ADD COLUMN, we drop the whole ``report_sections`` table — m_002
+    and m_003 will re-create it from scratch. After this, the DB has
+    the v1 shape; ``PRAGMA user_version = 1`` pins the replay entry
+    point.
     """
     from lucid.store.init import _SCHEMA_SQL_PATH
 
