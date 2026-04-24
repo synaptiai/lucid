@@ -34,6 +34,7 @@ from lucid.schemas import (
     ReportSection,
     SamplingConfigRecord,
     Source,
+    SynthesisBlock,
     TokenUsage,
     Turn,
 )
@@ -391,22 +392,34 @@ class CorpusStore:
         in ``store/schema.sql``). The row ``id`` is minted on first insert
         and preserved across updates — the UPDATE only touches the data
         columns, never ``id``.
+
+        ``blocks`` + ``citation_confidence`` are the Sonnet post-processor
+        output (Phase 5.6). On first insert they are typically empty /
+        NULL — the section ships as Opus markdown — and then a second
+        upsert after post-processing fills them in via ON CONFLICT,
+        preserving the row id.
         """
         now_iso = section.created_at.isoformat()
+        blocks_json = orjson.dumps(
+            [b.model_dump(mode="json") for b in section.blocks]
+        ).decode()
         self.connect().execute(
             """
             INSERT INTO report_sections (
                 id, audit_run_id, section_id, markdown,
                 cited_finding_ids_json, cited_turn_ids_json,
-                insufficient_evidence, decline_reason, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                insufficient_evidence, decline_reason, created_at,
+                blocks_json, citation_confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (audit_run_id, section_id) DO UPDATE SET
                 markdown = excluded.markdown,
                 cited_finding_ids_json = excluded.cited_finding_ids_json,
                 cited_turn_ids_json = excluded.cited_turn_ids_json,
                 insufficient_evidence = excluded.insufficient_evidence,
                 decline_reason = excluded.decline_reason,
-                created_at = excluded.created_at
+                created_at = excluded.created_at,
+                blocks_json = excluded.blocks_json,
+                citation_confidence = excluded.citation_confidence
             """,
             (
                 f"rs-{uuid.uuid4().hex[:12]}",
@@ -418,6 +431,8 @@ class CorpusStore:
                 1 if section.insufficient_evidence else 0,
                 section.decline_reason,
                 now_iso,
+                blocks_json,
+                section.citation_confidence,
             ),
         )
         self._commit()
@@ -429,18 +444,24 @@ class CorpusStore:
         see a stable, alphabetical sequence regardless of insertion
         order. SQLite returns ``insufficient_evidence`` as an ``int``
         (0/1); we cast to ``bool`` on the way out to match the Pydantic
-        field type.
+        field type. ``blocks_json`` is deserialized back through
+        :class:`SynthesisBlock` so callers see structured models, not raw
+        JSON; ``citation_confidence`` round-trips as ``float | None``.
         """
         rows = self.fetchall(
             "SELECT id, audit_run_id, section_id, markdown, "
             "cited_finding_ids_json, cited_turn_ids_json, "
-            "insufficient_evidence, decline_reason, created_at "
+            "insufficient_evidence, decline_reason, created_at, "
+            "blocks_json, citation_confidence "
             "FROM report_sections WHERE audit_run_id = ? "
             "ORDER BY section_id ASC",
             (audit_run_id,),
         )
         out: list[ReportSection] = []
         for row in rows:
+            raw_blocks = orjson.loads(row["blocks_json"]) if row["blocks_json"] else []
+            blocks = [SynthesisBlock.model_validate(b) for b in raw_blocks]
+            citation_confidence = row["citation_confidence"]
             out.append(
                 ReportSection(
                     audit_run_id=row["audit_run_id"],
@@ -451,6 +472,10 @@ class CorpusStore:
                     insufficient_evidence=bool(row["insufficient_evidence"]),
                     decline_reason=row["decline_reason"],
                     created_at=datetime.fromisoformat(row["created_at"]),
+                    blocks=blocks,
+                    citation_confidence=(
+                        float(citation_confidence) if citation_confidence is not None else None
+                    ),
                 )
             )
         return out

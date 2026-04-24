@@ -347,6 +347,13 @@ class ReportSection(BaseModel):
     section. ``markdown`` is empty, citation lists are empty, and
     ``decline_reason`` carries a human-readable explanation. The template
     renders "Section skipped: <decline_reason>" instead of prose.
+
+    ``blocks`` and ``citation_confidence`` carry the Sonnet 4.6
+    post-processor output (Phase 5.6). ``blocks`` is empty and
+    ``citation_confidence`` is ``None`` until the post-process step
+    runs; after Sonnet processes the section the same row is upserted
+    with both fields populated. Callers that read markdown directly
+    are unaffected; callers that want structured blocks read ``blocks``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -359,6 +366,8 @@ class ReportSection(BaseModel):
     insufficient_evidence: bool = False
     decline_reason: str | None = None
     created_at: datetime
+    blocks: list[SynthesisBlock] = Field(default_factory=list)
+    citation_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _check_insufficient_evidence_invariant(self) -> ReportSection:

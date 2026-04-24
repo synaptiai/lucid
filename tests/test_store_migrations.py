@@ -63,6 +63,14 @@ def _seed_v1_db(tmp_path: Path) -> Path:
     stable across production ``SCHEMA_VERSION`` bumps — otherwise the
     fixture silently lands at whatever the current version is and the
     migration-replay tests stop exercising anything.
+
+    Since schema.sql carries the full current state (v3), we roll the
+    shape back to v1 so the migrations we replay do real work:
+    ``report_sections`` is introduced by m_002 (dropped here), and
+    m_003 adds ``blocks_json`` / ``citation_confidence`` (dropped here
+    too — SQLite 3.35+ supports ``ALTER TABLE DROP COLUMN``). After
+    this, the DB has the v1 shape; ``PRAGMA user_version = 1`` pins
+    the replay entry point.
     """
     from lucid.store.init import _SCHEMA_SQL_PATH
 
@@ -70,6 +78,10 @@ def _seed_v1_db(tmp_path: Path) -> Path:
     conn = sqlite3.connect(db)
     try:
         conn.executescript(_SCHEMA_SQL_PATH.read_text(encoding="utf-8"))
+        # Drop tables / columns that post-v1 migrations introduce so
+        # the subsequent migration replay does real work rather than
+        # tripping on duplicate-definition errors.
+        conn.execute("DROP TABLE IF EXISTS report_sections;")
         conn.execute("PRAGMA user_version = 1;")
         conn.commit()
     finally:
@@ -209,5 +221,75 @@ def test_initialize_db_at_current_schema_version_is_a_noop(tmp_path: Path) -> No
     try:
         (uv,) = conn.execute("PRAGMA user_version;").fetchone()
         assert uv == SCHEMA_VERSION
+    finally:
+        conn.close()
+
+
+def test_real_m_003_migration_adds_blocks_and_confidence_columns(
+    tmp_path: Path,
+) -> None:
+    """Replay the actual production m_003.sql and assert the new
+    columns exist with the expected defaults.
+
+    Seeds a DB at v2 by applying the v2 report_sections DDL (taken
+    verbatim from the shipped m_002.sql) and then lets initialize_db
+    drive v2 → v3. The real m_003.sql from the production
+    migrations/ dir is used — no monkeypatching of SCHEMA_VERSION
+    because Phase 5.6a IS the v3 ship.
+    """
+    db = tmp_path / "v2.sqlite3"
+    conn = sqlite3.connect(db)
+    try:
+        # Minimal v2 DB: audit_runs + pre-v3 report_sections columns.
+        conn.executescript(
+            """
+            CREATE TABLE audit_runs (id TEXT PRIMARY KEY);
+            CREATE TABLE report_sections (
+                id                       TEXT PRIMARY KEY,
+                audit_run_id             TEXT NOT NULL REFERENCES audit_runs(id),
+                section_id               TEXT NOT NULL,
+                markdown                 TEXT NOT NULL DEFAULT '',
+                cited_finding_ids_json   TEXT NOT NULL DEFAULT '[]',
+                cited_turn_ids_json      TEXT NOT NULL DEFAULT '[]',
+                insufficient_evidence    INTEGER NOT NULL DEFAULT 0,
+                decline_reason           TEXT,
+                created_at               TEXT NOT NULL,
+                UNIQUE (audit_run_id, section_id)
+            );
+            INSERT INTO audit_runs(id) VALUES ('run-legacy');
+            INSERT INTO report_sections (
+                id, audit_run_id, section_id, markdown, cited_finding_ids_json,
+                cited_turn_ids_json, insufficient_evidence, decline_reason, created_at
+            ) VALUES (
+                'rs-legacy', 'run-legacy', 'exec_summary', 'legacy prose',
+                '[]', '[]', 0, NULL, '2026-04-20T00:00:00+00:00'
+            );
+            PRAGMA user_version = 2;
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    initialize_db(db)
+
+    conn = sqlite3.connect(db)
+    try:
+        (uv,) = conn.execute("PRAGMA user_version;").fetchone()
+        assert uv == SCHEMA_VERSION
+        cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(report_sections);").fetchall()
+        }
+        assert "blocks_json" in cols
+        assert "citation_confidence" in cols
+
+        # Pre-existing row should have the defaults backfilled.
+        row = conn.execute(
+            "SELECT blocks_json, citation_confidence FROM report_sections "
+            "WHERE id = 'rs-legacy'"
+        ).fetchone()
+        assert row[0] == "[]"
+        assert row[1] is None
     finally:
         conn.close()

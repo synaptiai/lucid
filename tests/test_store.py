@@ -19,6 +19,7 @@ from lucid.schemas import (
     Role,
     SamplingConfigRecord,
     Source,
+    SynthesisBlock,
     TextBlock,
     TokenUsage,
     Turn,
@@ -779,3 +780,110 @@ def test_fetch_report_sections_ordering(tmp_path):
         assert [r.section_id for r in rows] == [
             "exec_summary", "module_b_narrative", "top_3_actions",
         ]
+
+
+# ----- Phase 5.6a: blocks + citation_confidence round-trip ---------------
+
+
+def test_report_section_roundtrip_with_blocks_and_confidence(tmp_path):
+    """New fields round-trip through upsert + fetch."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store, run_id="run-blocks-1")
+        section = ReportSection(
+            audit_run_id="run-blocks-1",
+            section_id="exec_summary",
+            markdown="Pattern observed [F:f1].",
+            cited_finding_ids=["f1"],
+            cited_turn_ids=[],
+            insufficient_evidence=False,
+            decline_reason=None,
+            created_at=datetime.now(tz=UTC),
+            blocks=[
+                SynthesisBlock(
+                    text="Pattern observed.",
+                    citations=["f1"],
+                    aggregate_claim=None,
+                    aggregate_support=None,
+                ),
+            ],
+            citation_confidence=0.85,
+        )
+        store.upsert_report_section(section)
+        rows = store.fetch_report_sections_for_run("run-blocks-1")
+        assert len(rows) == 1
+        assert rows[0] == section
+
+
+def test_report_section_defaults_blocks_to_empty_and_confidence_to_none(tmp_path):
+    """Sections persisted before Sonnet runs should round-trip with defaults."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store, run_id="run-blocks-2")
+        section = ReportSection(
+            audit_run_id="run-blocks-2",
+            section_id="exec_summary",
+            markdown="Prose without post-process.",
+            cited_finding_ids=[],
+            cited_turn_ids=[],
+            insufficient_evidence=False,
+            decline_reason=None,
+            created_at=datetime.now(tz=UTC),
+        )
+        store.upsert_report_section(section)
+        rows = store.fetch_report_sections_for_run("run-blocks-2")
+        assert rows[0].blocks == []
+        assert rows[0].citation_confidence is None
+
+
+def test_report_section_upsert_updates_blocks_post_hoc(tmp_path):
+    """Simulates Phase 5.6b flow: section persisted with empty blocks,
+    then Sonnet post-process upserts the same section with blocks populated."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store, run_id="run-blocks-3")
+        # Initial write (Checkpoint B path — no blocks yet).
+        base = ReportSection(
+            audit_run_id="run-blocks-3",
+            section_id="exec_summary",
+            markdown="Prose [F:f1].",
+            cited_finding_ids=["f1"],
+            cited_turn_ids=[],
+            insufficient_evidence=False,
+            decline_reason=None,
+            created_at=datetime.now(tz=UTC),
+        )
+        store.upsert_report_section(base)
+        # Post-process upsert (Phase 5.6b): same section_id + audit_run_id,
+        # preserves id via ON CONFLICT, adds blocks + confidence.
+        enriched = base.model_copy(update={
+            "blocks": [SynthesisBlock(text="Prose.", citations=["f1"])],
+            "citation_confidence": 0.9,
+        })
+        store.upsert_report_section(enriched)
+        rows = store.fetch_report_sections_for_run("run-blocks-3")
+        assert len(rows) == 1
+        assert len(rows[0].blocks) == 1
+        assert rows[0].citation_confidence == 0.9
+
+
+def test_report_section_check_rejects_confidence_out_of_range(tmp_path):
+    """DB CHECK rejects citation_confidence outside [0.0, 1.0]."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store, run_id="run-blocks-4")
+        conn = store.connect()
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
+                "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
+                "decline_reason, created_at, blocks_json, citation_confidence) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("rs-oob", "run-blocks-4", "exec_summary", "prose",
+                 "[]", "[]", 0, None, "2026-04-24T10:00:00+00:00", "[]", 1.5),
+            )
+            conn.commit()

@@ -457,6 +457,38 @@ def test_report_section_validator_rejects_populated_with_empty_markdown() -> Non
         )
 
 
+def test_report_section_accepts_blocks_and_confidence() -> None:
+    section = ReportSection(
+        audit_run_id="run-1",
+        section_id="exec_summary",
+        markdown="prose [F:f1]",
+        cited_finding_ids=["f1"],
+        cited_turn_ids=[],
+        insufficient_evidence=False,
+        decline_reason=None,
+        created_at=datetime.now(tz=UTC),
+        blocks=[SynthesisBlock(text="prose", citations=["f1"])],
+        citation_confidence=0.92,
+    )
+    assert len(section.blocks) == 1
+    assert section.citation_confidence == 0.92
+
+
+def test_report_section_rejects_confidence_out_of_range() -> None:
+    with pytest.raises(ValidationError):
+        ReportSection(
+            audit_run_id="run-1",
+            section_id="exec_summary",
+            markdown="prose",
+            cited_finding_ids=[],
+            cited_turn_ids=[],
+            insufficient_evidence=False,
+            decline_reason=None,
+            created_at=datetime.now(tz=UTC),
+            citation_confidence=1.5,  # > 1.0 → rejected
+        )
+
+
 # ----- synthesis output models -----
 
 

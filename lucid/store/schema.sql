@@ -213,6 +213,11 @@ CREATE TABLE IF NOT EXISTS report_sections (
     insufficient_evidence    INTEGER NOT NULL DEFAULT 0 CHECK (insufficient_evidence IN (0, 1)),
     decline_reason           TEXT,
     created_at               TEXT NOT NULL,
+    blocks_json              TEXT NOT NULL DEFAULT '[]',
+    citation_confidence      REAL CHECK (
+        citation_confidence IS NULL
+        OR (citation_confidence >= 0.0 AND citation_confidence <= 1.0)
+    ),
     CHECK (
         (insufficient_evidence = 1
          AND length(markdown) = 0
