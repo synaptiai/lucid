@@ -147,8 +147,10 @@ prompts/                  Versioned prompt templates (markdown)
   module_f/
   module_h/
   synthesis/              Opus 4.7 writer prompt (narrative sections).
-  synthesis_validator/    Sonnet post-processor prompt (deferred to post-ship
-                          polish; v1 exists but is not wired yet).
+                          v2 is current; v1 preserved (frozen once shipped).
+  synthesis_validator/    Sonnet 4.6 post-processor prompt. Wired — reads
+                          Opus markdown and emits SynthesisSectionOutput
+                          JSON via AsyncAnthropic.messages.parse().
 
 tests/                    pytest
   fixtures/               Small real corpora for ingest testing
@@ -347,14 +349,24 @@ If Managed Agents has friction, fall back path is the Claude Agent SDK (`claude_
 
 The synthesis phase runs *after* the deterministic scoring loop. It reads the `findings` table + spot-reads corpus conversations via read-only custom tools, and writes narrative report sections into the `report_sections` table.
 
-### Two-phase pipeline
+### Two-phase pipeline (actually three-phase, end-to-end)
 
 1. **Scoring** (`lucid.run._run_scoring_loop`): deterministic Python for-loop invoking each enabled module via `invoke_module_for_run`. No agent. Preserves calibration reproducibility — κ numbers against SpiralBench remain stable because per-turn rubric classification happens in module code, not agent reasoning.
-2. **Synthesis** (`lucid.synthesis.run.run_synthesis_session`): one Managed Agents session with Opus 4.7 as the writer. The agent writes markdown with `[F:finding_id]` / `[T:turn_id]` citation tokens via the `write_report_section` tool; every cited id is validated against the DB before persistence.
+2. **Synthesis write** (`lucid.synthesis.run.run_synthesis_session`): one Managed Agents session with Opus 4.7 as the writer. The agent writes markdown with `[F:finding_id]` / `[T:turn_id]` citation tokens via the `write_report_section` tool; every cited id is validated against the DB before persistence.
+3. **Synthesis structure** (`lucid.synthesis.post_process.post_process_sections`): after the agent session completes, Sonnet 4.6 reads each populated section's markdown and emits `SynthesisSectionOutput` JSON via `AsyncAnthropic.messages.parse()`. The resulting `blocks` + `citation_confidence` are upserted back onto the `ReportSection` row. Declined sections skip the SDK call; per-section failures log + leave the section unchanged (graceful degradation). Sections run concurrently via `asyncio.gather`.
+
+### Session-control contract (Managed Agents lifecycle)
+
+Observed behavior in live runs (see phase-7.3-live-smoke-clean tag for full event traces):
+
+- **`session.status_idle` is transient, not terminal** — it fires between every agent turn while the server waits for `user.custom_tool_result`. Only `session.finished` is treated as the terminal event; idle cycles are ignored by the event loop.
+- **Stall watchdog threshold: 300s** (`SynthesisConfig.heartbeat_stall_seconds`). Opus 4.7 `effort=high` turns can legitimately take 2-3 minutes of quiet stream time while generating section markdown. Tighter thresholds produced false-positive stalls mid-generation. The 10s check cadence is sufficient given the 300s window.
+- **Stream iteration runs in a worker thread** — `_iter_stream` offloads the sync SDK iterator via `asyncio.to_thread(next, ...)` so the async event loop can schedule the watchdog. Without this, the sync `for event in stream` pins the event loop during blocking waits.
+- **Every event type is logged at INFO** by `SynthesisSession.run()` for post-mortem traceability; `agent.message` / `agent.text` events fire a WARNING with a preview (first 80 chars) since prose-between-tool-calls is the classic informational-session anti-pattern.
 
 ### Citation contract
 
-Every factual claim in agent prose must carry an inline `[F:finding_id]` or `[T:turn_id]` token. The `write_report_section` handler rejects unknown ids with `{"error": "unknown_ids", ...}`; the agent sees the error and retries with corrected ids (capped at `max_regen_attempts=2` per section). Valid ids persist to the `report_sections` table; the Jinja2 `markdown_with_citations` filter resolves tokens to anchor links at render time.
+Every factual claim in agent prose must carry an inline `[F:finding_id]` or `[T:turn_id]` token. The `write_report_section` handler rejects unknown ids with `{"error": "unknown_ids", ...}`; the agent sees the error and retries with corrected ids (capped at `max_regen_attempts=2` per section). Valid ids persist to the `report_sections` table; the Jinja2 `markdown_with_citations` filter resolves tokens to anchor links at render time. The `report_sections` table also carries `blocks_json` (Sonnet-structured blocks per claim) and `citation_confidence` (Sonnet's 0.0-1.0 per-section grounding score); both populate on re-upsert after `post_process_sections`.
 
 ### Failure-mode guards (post-generation)
 
@@ -378,10 +390,13 @@ Synthesis agents are named `lucid-synthesis-v<prompt_version>` (see `lucid.synth
 
 ### Prompt-version bumps
 
-Synthesis prompts live at `prompts/synthesis/v{N}.md` (Opus writer) and `prompts/synthesis_validator/v{N}.md` (Sonnet post-processor — deferred to post-ship polish). Bumping the version:
-1. Author `v{N+1}.md` with updated frontmatter + hash.
+Synthesis prompts live at `prompts/synthesis/v{N}.md` (Opus writer; v2 current) and `prompts/synthesis_validator/v{N}.md` (Sonnet 4.6 post-processor; v1 current). Both are frozen once shipped — iteration creates a new version file, never edits in place. Bumping the writer version:
+1. Author `v{N+1}.md` with updated frontmatter + hash (recompute `sha256(body_bytes)`).
 2. Update `SYNTHESIS_PROMPT_VERSION` in `lucid/synthesis/__init__.py`.
-3. Next audit run creates a fresh `lucid-synthesis-v{N+1}` agent; `prune_stale_synthesis_agents` archives the old one on its next pass.
+3. `lucid/synthesis/run.py` loads the prompt via `load_prompt("synthesis", SYNTHESIS_PROMPT_VERSION)` — the constant is the single source of truth; no hardcoded `v2` strings in the module.
+4. Next audit run creates a fresh `lucid-synthesis-v{N+1}` agent; `prune_stale_synthesis_agents` archives the previous version on its next pass.
+
+The v1 → v2 bump (commit `375ebef`) replaced soft "start by calling get_findings... then write each section" framing with an explicit **Execution protocol** section enumerating the exact turn-by-turn tool-call sequence, plus an opening directive forbidding prose text between tool calls. This landed after live run `run-332ed9dbccae` showed Opus emitting a text summary instead of continuing with `write_report_section` calls (the classic "informational session" pattern).
 
 ## Report + deck conventions
 

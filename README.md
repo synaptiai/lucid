@@ -15,15 +15,21 @@ Alpha. In-progress submission for the Anthropic Opus 4.7 hackathon
 (2026-04-21 → 2026-04-26). Not yet published to PyPI — install from
 source until a v0.1.0 tag lands.
 
-The audit pipeline runs in two phases:
+The audit pipeline runs in three phases:
 
 1. **Scoring** — deterministic Python invokes modules A/B/C/D/E/F/H
    plus Module G (attribution), each producing `Finding` rows.
-2. **Synthesis** — a Managed Agents session with Claude Opus 4.7
+2. **Synthesis write** — a Managed Agents session with Claude Opus 4.7
    reads the findings + spot-reads the corpus and writes narrative
    report sections (executive summary, top-3 actions, headline
-   framing, per-module prose). Every factual claim cites a finding
-   or turn id; the HTML renderer resolves citations to anchor links.
+   framing, per-module prose) with inline `[F:finding_id]` /
+   `[T:turn_id]` citation tokens. The `write_report_section` tool
+   validates every cited id against the DB before persisting.
+3. **Synthesis structure** — Claude Sonnet 4.6 post-processes each
+   section's markdown into `SynthesisSectionOutput` JSON via
+   `messages.parse()`, populating structured `blocks` + a per-section
+   `citation_confidence` score back onto the `ReportSection` row.
+   The HTML renderer resolves inline citation tokens to anchor links.
 
 Pass `--no-synthesis` to skip the narrative phase; the scoring phase
 still produces all findings + the deterministic report scaffolding.
