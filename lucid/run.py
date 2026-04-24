@@ -290,8 +290,19 @@ def _render_report_or_log(
         )
         return None
     findings = store.fetch_findings_for_run(run_id)
+    # Synthesis sections are optional: the report renderer falls back
+    # to its deterministic summary blocks when this list is empty, so
+    # a fetch failure should never kill the report. We still let a DB
+    # error propagate here — the outer except-Exception below swallows
+    # and logs it alongside any template/render error.
+    report_sections = store.fetch_report_sections_for_run(run_id)
     try:
-        path = write_report(audit_run, findings, output_dir=output_dir)
+        path = write_report(
+            audit_run,
+            findings,
+            output_dir=output_dir,
+            report_sections=report_sections,
+        )
     except Exception as err:  # pragma: no cover — logged for operator triage
         _LOGGER.exception("report render failed")
         progress_log("ERROR", f"report render failed: {err}")
@@ -301,7 +312,12 @@ def _render_report_or_log(
     # report. A failure here must not bury the report path the user
     # already has, so it logs and continues.
     try:
-        deck_path = write_deck(audit_run, findings, output_dir=output_dir)
+        deck_path = write_deck(
+            audit_run,
+            findings,
+            output_dir=output_dir,
+            report_sections=report_sections,
+        )
         progress_log("INFO", f"Deck written: {deck_path}")
     except Exception as err:  # pragma: no cover — logged for operator triage
         _LOGGER.exception("deck render failed")

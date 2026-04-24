@@ -149,6 +149,38 @@
 </section>
 {% endif %}
 
+{# ───── Executive summary — agent-driven when present ─────
+   When the synthesis phase has written an ``exec_summary`` section,
+   render its markdown above the deterministic Actionable Summary
+   below. ``markdown_with_citations`` HTML-escapes the prose first
+   (prompt-injection defence) and then re-introduces ``[F:id]`` /
+   ``[T:id]`` tokens as anchor links to the in-page finding/turn
+   blocks. When no section is present (demo runs, ``--no-synthesis``
+   runs, or pre-synthesis reruns), this block is skipped entirely and
+   the deterministic Actionable Summary below remains the primary
+   lead-in. #}
+{% set exec = report_sections.get("exec_summary") if report_sections else None %}
+{% if exec and not exec.insufficient_evidence %}
+<section class="exec-summary agent-prose" aria-labelledby="exec-h">
+  <p class="eyebrow" id="exec-h">Executive summary</p>
+  <h2 class="serif">What this audit found</h2>
+  <div class="agent-markdown">
+    {{ exec.markdown | markdown_with_citations }}
+  </div>
+  <p class="agent-attribution muted">
+    Written by Claude Opus 4.7 via the Lucid synthesis session.
+    {% if exec.cited_finding_ids %}
+      Citations: {{ exec.cited_finding_ids | length }} finding{% if exec.cited_finding_ids | length != 1 %}s{% endif %} referenced.
+    {% endif %}
+  </p>
+</section>
+{% elif exec and exec.insufficient_evidence %}
+<section class="exec-summary agent-declined" aria-labelledby="exec-h">
+  <p class="eyebrow" id="exec-h">Executive summary</p>
+  <p class="muted"><em>Section skipped: {{ exec.decline_reason }}</em></p>
+</section>
+{% endif %}
+
 {# ───── Actionable Summary — three bullets pointing at real action ─────
    Derived from the top-3 radar spokes. Each bullet names the module,
    the concrete finding count, and a one-sentence recommendation that

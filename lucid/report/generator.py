@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import html
 import math
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -36,9 +37,10 @@ from pathlib import Path
 from typing import Literal
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from markupsafe import Markup, escape
 from scipy.stats import beta as scipy_beta
 
-from lucid.schemas import AuditRun, Finding, ModuleName
+from lucid.schemas import AuditRun, Finding, ModuleName, ReportSection
 
 __all__ = [
     "BEHAVIOR_DESCRIPTIONS",
@@ -57,6 +59,7 @@ __all__ = [
     "behavior_to_plain_english",
     "beta_ci",
     "build_jinja_env",
+    "markdown_with_citations",
     "render_report",
     "write_deck",
     "write_report",
@@ -2767,10 +2770,80 @@ def aggregate_findings(
 
 @dataclass(frozen=True, slots=True)
 class ReportContext:
-    """What the template receives."""
+    """What the template receives.
+
+    ``report_sections`` is a mapping of ``section_id`` → ``ReportSection``
+    populated by the synthesis phase. An empty dict means the synthesis
+    phase did not run (demo renders, ``--no-synthesis`` runs, or
+    pre-synthesis reruns); templates degrade gracefully to the existing
+    deterministic summary blocks in that case.
+    """
 
     audit_run: AuditRun
     aggregate: AggregatedFindings
+    report_sections: dict[str, ReportSection] = field(default_factory=dict)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Agent-prose rendering (synthesis-phase output)
+# ──────────────────────────────────────────────────────────────────────────
+#
+# ``markdown_with_citations`` is the one Jinja filter that operates on
+# agent-authored text (``ReportSection.markdown``). Defence-in-depth:
+# the prose is HTML-escaped first (prompt-injected markup is defanged),
+# *then* citation tokens — which the synthesis validator has already
+# proven reference real finding/turn ids — are re-introduced as anchor
+# links via ``Markup(...)``. The re-introduction step only ever emits
+# characters from the closed set ``[a-zA-Z0-9_-]`` inside href/id
+# attributes, because the regex capture group is constrained to that
+# alphabet.
+
+
+_CITATION_FINDING_PATTERN = re.compile(r"\[F:([a-zA-Z0-9_-]+)\]")
+_CITATION_TURN_PATTERN = re.compile(r"\[T:([a-zA-Z0-9_-]+)\]")
+
+
+def markdown_with_citations(value: str | None) -> Markup:
+    """Render agent-written prose with ``[F:id]`` / ``[T:id]`` citation tokens.
+
+    Behaviour:
+
+    1. HTML-escape the raw markdown body first. Any tag-looking content
+       in the prose — including a prompt-injected ``<script>`` — is
+       rendered as text, not markup.
+    2. Replace citation tokens (``[F:id]``/``[T:id]``) with anchor
+       links pointing at the in-page finding/turn detail blocks.
+    3. Split on blank lines into paragraphs; single newlines inside a
+       paragraph become ``<br>``.
+
+    This is deliberately a minimal renderer — no bold/italic/list
+    parsing. The synthesis prompt system constrains the agent to plain
+    paragraphs with citation tokens; if richer markdown is ever needed,
+    upgrade to a real markdown library behind the same name.
+
+    The returned value is marked safe for Jinja (``Markup`` subclass
+    of ``str``) so the template does NOT need ``|safe`` on top.
+    """
+    if not value:
+        return Markup("")
+    escaped = str(escape(value))
+
+    def _f_repl(match: re.Match[str]) -> str:
+        fid = match.group(1)
+        return f'<a href="#finding-{fid}" class="citation-link citation-finding">[F]</a>'
+
+    def _t_repl(match: re.Match[str]) -> str:
+        tid = match.group(1)
+        return f'<a href="#turn-{tid}" class="citation-link citation-turn">[T]</a>'
+
+    replaced = _CITATION_FINDING_PATTERN.sub(_f_repl, escaped)
+    replaced = _CITATION_TURN_PATTERN.sub(_t_repl, replaced)
+
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", replaced) if p.strip()]
+    if not paragraphs:
+        return Markup("")
+    rendered = "".join(f"<p>{p.replace(chr(10), '<br>')}</p>" for p in paragraphs)
+    return Markup(rendered)
 
 
 def _format_pct(value: float) -> str:
@@ -3459,6 +3532,7 @@ def build_jinja_env(template_dir: Path | None = None) -> Environment:
     env.filters["svg_confidence_histogram"] = _svg_confidence_histogram
     env.filters["svg_heatmap"] = _svg_heatmap
     env.filters["citation_url"] = _citation_url
+    env.filters["markdown_with_citations"] = markdown_with_citations
     return env
 
 
@@ -3468,6 +3542,7 @@ def render_report(
     *,
     template_name: str = DEFAULT_TEMPLATE_NAME,
     template_dir: Path | None = None,
+    report_sections: Iterable[ReportSection] | None = None,
 ) -> str:
     """Render the report HTML as a string.
 
@@ -3475,12 +3550,23 @@ def render_report(
     ``partial``, ``aborted_pre_spend``, …) — the template surfaces the
     status in a banner and, for partial runs, marks incomplete modules
     separately in their sections.
+
+    ``report_sections`` — if provided — are the synthesis-agent-written
+    sections for this run. They are keyed by ``section_id`` before
+    being exposed to the template as ``report_sections``. An empty /
+    ``None`` value means no agent prose is available; the template
+    falls back to the deterministic summary blocks it already renders.
     """
     aggregate = aggregate_findings(
         findings,
         skipped_modules=tuple(audit_run.skipped_modules),
     )
-    context = ReportContext(audit_run=audit_run, aggregate=aggregate)
+    sections_by_id: dict[str, ReportSection] = {s.section_id: s for s in (report_sections or [])}
+    context = ReportContext(
+        audit_run=audit_run,
+        aggregate=aggregate,
+        report_sections=sections_by_id,
+    )
     env = build_jinja_env(template_dir)
     template = env.get_template(template_name)
     return template.render(
@@ -3490,6 +3576,7 @@ def render_report(
         total=context.aggregate.total,
         model_buckets=context.aggregate.model_buckets,
         time_buckets=context.aggregate.time_buckets,
+        report_sections=context.report_sections,
     )
 
 
@@ -3500,6 +3587,7 @@ def write_report(
     output_dir: Path = Path("report"),
     template_name: str = DEFAULT_TEMPLATE_NAME,
     template_dir: Path | None = None,
+    report_sections: Iterable[ReportSection] | None = None,
 ) -> Path:
     """Render and write the report to ``<output_dir>/<run_id>.html``.
 
@@ -3510,6 +3598,7 @@ def write_report(
         findings,
         template_name=template_name,
         template_dir=template_dir,
+        report_sections=report_sections,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     out = output_dir / f"{audit_run.id}.html"
@@ -3528,6 +3617,7 @@ def write_deck(
     template_name: str = DECK_TEMPLATE_NAME,
     template_dir: Path | None = None,
     filename: str = "lucid-deck.html",
+    report_sections: Iterable[ReportSection] | None = None,
 ) -> Path:
     """Render the hackathon-style demo deck alongside the report.
 
@@ -3539,12 +3629,17 @@ def write_deck(
 
     Renders into ``<output_dir>/<filename>`` (default ``lucid-deck.html``)
     so the report file URL stays predictable.
+
+    ``report_sections`` is threaded through for parity with
+    :func:`write_report`; deck templates may opt in to agent-prose
+    surfaces in future iterations.
     """
     html_text = render_report(
         audit_run,
         findings,
         template_name=template_name,
         template_dir=template_dir,
+        report_sections=report_sections,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     out = output_dir / filename

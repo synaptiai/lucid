@@ -1406,6 +1406,63 @@
     font-size: 0.9rem;
   }
 
+  /* ───── Executive summary — agent-written prose ─────
+     Visually distinct from the deterministic summary blocks below:
+     a soft left accent rule + slightly inset padding signals "this
+     paragraph was written, not templated". Citation links are small
+     muted superscript-style anchors that resolve to in-page finding
+     or turn detail blocks. */
+  .exec-summary {
+    margin: 1.6rem 0 2rem;
+    padding: 1.3rem 1.5rem 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--slate-soft);
+  }
+  .exec-summary h2 {
+    margin: 0.3rem 0 0.8rem;
+    font-size: 1.3rem;
+    line-height: 1.3;
+  }
+  .exec-summary.agent-declined {
+    border-left-color: var(--rule);
+    padding: 1rem 1.5rem;
+  }
+  .agent-markdown p {
+    margin: 0.7em 0;
+    line-height: 1.6;
+    color: var(--ink);
+    font-size: 1rem;
+  }
+  .agent-markdown p:first-child { margin-top: 0; }
+  .agent-markdown p:last-child { margin-bottom: 0; }
+  .agent-attribution {
+    margin-top: 1rem;
+    padding-top: 0.7rem;
+    border-top: 1px dotted var(--rule-soft);
+    font-size: 0.78rem;
+    color: var(--slate);
+  }
+  .citation-link {
+    display: inline-block;
+    margin: 0 0.05em;
+    padding: 0 0.25em;
+    font-size: 0.72em;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-weight: 600;
+    color: var(--slate);
+    text-decoration: none;
+    border-radius: 2px;
+    vertical-align: super;
+    line-height: 1;
+  }
+  .citation-link:hover {
+    background: var(--bg-deep);
+    color: var(--ink);
+  }
+  .citation-finding { color: var(--severity-low); }
+  .citation-turn { color: var(--positive); }
+
   /* Wider screens get a touch more breathing room. */
   @media (min-width: 1300px) {
     body { max-width: 1240px; padding-left: 3rem; padding-right: 3rem; }
