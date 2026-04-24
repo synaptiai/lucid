@@ -19,8 +19,16 @@ from lucid.synthesis.session import (
 )
 from lucid.synthesis.tools import build_synthesis_registry
 
+# Writer-prompt version key. Keyed to ``prompts/synthesis/<version>.md``
+# *and* to the Managed Agents lifecycle name
+# (``lucid-synthesis-v<SYNTHESIS_PROMPT_VERSION>``) so a prompt bump
+# forces a new agent. Bump in lockstep with the prompt file's
+# ``version`` frontmatter when shipping a prompt revision.
+SYNTHESIS_PROMPT_VERSION = "v1"
+
 __all__ = [
     "MANAGED_AGENTS_BETA_HEADER",
+    "SYNTHESIS_PROMPT_VERSION",
     "HeartbeatMonitor",
     "SynthesisConfig",
     "SynthesisHandles",

@@ -112,7 +112,23 @@ def _cache_padding_for(model: str, body: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class PromptFile:
-    """Parsed contents of ``prompts/module_<letter>/<version>.md``."""
+    """Parsed contents of a prompt markdown file.
+
+    Two on-disk layouts are supported:
+
+    - ``prompts/module_<letter>/<version>.md`` — detection-module prompts
+      (Modules A–H). Required to declare a ``module`` key in frontmatter
+      (the single-letter label).
+    - ``prompts/<name>/<version>.md`` — non-module prompts (currently
+      the synthesis-agent writer + post-processor). The ``module`` field
+      in frontmatter is optional; its value defaults to the directory
+      name when absent.
+
+    Sonnet-family prompts may substitute ``temperature`` for ``effort``
+    and may omit ``thinking_mode``. Those keys default to empty strings
+    on the dataclass; callers that need them should read ``frontmatter``
+    directly (the raw dict is preserved for that purpose).
+    """
 
     path: Path
     module: str
@@ -124,6 +140,7 @@ class PromptFile:
     purpose: str
     body: str
     body_hash: str
+    frontmatter: dict[str, str]
 
     @property
     def padded_body(self) -> str:
@@ -142,9 +159,11 @@ class PromptFile:
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)\Z", re.DOTALL)
 
-_REQUIRED_KEYS = frozenset(
-    {"version", "module", "model", "thinking_mode", "effort", "citation", "purpose", "hash"}
-)
+# Keys required on every prompt regardless of layout.
+_REQUIRED_KEYS = frozenset({"version", "model", "citation", "purpose", "hash"})
+
+# Keys required on the classic ``module_<letter>`` layout only.
+_REQUIRED_MODULE_KEYS = frozenset({"module", "thinking_mode", "effort"})
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -177,14 +196,28 @@ def load_prompt(
     *,
     root: Path = Path("prompts"),
 ) -> PromptFile:
-    """Load and validate ``prompts/module_<module>/<version>.md``.
+    """Load and validate a prompt file.
+
+    Path resolution tries two layouts in order:
+
+    1. ``{root}/module_{module.lower()}/{version}.md`` — the detection-
+       module layout (Modules A–H).
+    2. ``{root}/{module.lower()}/{version}.md`` — the flat layout used
+       by non-module prompts such as ``synthesis`` and
+       ``synthesis_validator``.
 
     Raises :class:`ValueError` if any required frontmatter key is missing
     or if the declared ``hash`` does not equal ``sha256`` of the body.
     """
-    path = root / f"module_{module.lower()}" / f"{version}.md"
-    if not path.is_file():
-        raise FileNotFoundError(f"prompt file not found: {path}")
+    candidates = [
+        root / f"module_{module.lower()}" / f"{version}.md",
+        root / module.lower() / f"{version}.md",
+    ]
+    path = next((p for p in candidates if p.is_file()), None)
+    if path is None:
+        raise FileNotFoundError(
+            f"prompt file not found; tried {[str(c) for c in candidates]}"
+        )
 
     text = path.read_text(encoding="utf-8")
     fm, body = _parse_frontmatter(text)
@@ -193,6 +226,17 @@ def load_prompt(
     if missing:
         raise ValueError(f"{path}: frontmatter missing keys {sorted(missing)}")
 
+    # Classic module layout requires the per-module keys; flat layout
+    # treats them as optional (Sonnet prompts use ``temperature`` in
+    # place of ``effort`` and may omit ``thinking_mode`` entirely).
+    is_module_layout = path.parent.name.startswith("module_")
+    if is_module_layout:
+        missing_module = _REQUIRED_MODULE_KEYS - fm.keys()
+        if missing_module:
+            raise ValueError(
+                f"{path}: frontmatter missing keys {sorted(missing_module)}"
+            )
+
     body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
     if fm["hash"] != body_hash:
         raise ValueError(
@@ -200,15 +244,21 @@ def load_prompt(
             f"sha256(body) {body_hash!r} — bump `hash:` after editing body"
         )
 
+    # ``module`` defaults to the directory name when omitted (flat
+    # layout). ``thinking_mode``/``effort`` default to empty strings;
+    # callers that care read ``frontmatter`` directly.
+    module_label = fm.get("module", path.parent.name)
+
     return PromptFile(
         path=path,
-        module=fm["module"],
+        module=module_label,
         version=fm["version"],
         model=fm["model"],
-        thinking_mode=fm["thinking_mode"],
-        effort=fm["effort"],
+        thinking_mode=fm.get("thinking_mode", ""),
+        effort=fm.get("effort", ""),
         citation=fm["citation"],
         purpose=fm["purpose"],
         body=body,
         body_hash=body_hash,
+        frontmatter=dict(fm),
     )

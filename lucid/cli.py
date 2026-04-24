@@ -403,6 +403,7 @@ def cleanup_agents(
     """
     configure_logging(log_level)
 
+    from lucid.synthesis import SYNTHESIS_PROMPT_VERSION
     from lucid.synthesis.lifecycle import (
         classify_agent,
         current_synthesis_agent_name,
@@ -410,10 +411,7 @@ def cleanup_agents(
         wipe_all_lucid_agents,
     )
 
-    # TODO(phase-4.2): import SYNTHESIS_PROMPT_VERSION from
-    # prompts/synthesis/ once the v1 prompt lands. Until then, the CLI
-    # hard-codes "v1" so prune keeps the current agent alive.
-    current_prompt_version = "v1"
+    current_prompt_version = SYNTHESIS_PROMPT_VERSION
 
     try:
         sync_client, _ = _build_anthropic_clients_or_exit()
