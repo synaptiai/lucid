@@ -708,7 +708,23 @@ def test_upsert_report_section_is_idempotent(tmp_path):
             decline_reason=None,
             created_at=datetime(2026, 4, 24, 11, 0, tzinfo=UTC),
         )
+
+        # Capture the synthetic row id before the second upsert — the docstring
+        # promises it is preserved across re-upserts and we want that promise
+        # under test.
+        id_before = store.fetchall(
+            "SELECT id FROM report_sections WHERE audit_run_id = ? AND section_id = ?",
+            ("run-ut3", "exec_summary"),
+        )[0]["id"]
+
         store.upsert_report_section(section_v2)
+
+        id_after = store.fetchall(
+            "SELECT id FROM report_sections WHERE audit_run_id = ? AND section_id = ?",
+            ("run-ut3", "exec_summary"),
+        )[0]["id"]
+
+        assert id_before == id_after, "upsert must preserve the synthetic row id"
 
         rows = store.fetch_report_sections_for_run("run-ut3")
         assert len(rows) == 1, "Upsert must not duplicate"

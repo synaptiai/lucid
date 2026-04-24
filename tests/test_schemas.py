@@ -406,3 +406,48 @@ def test_report_section_validator_rejects_insufficient_without_decline_reason() 
             decline_reason=None,
             created_at=datetime.now(tz=UTC),
         )
+
+
+def test_report_section_validator_rejects_insufficient_with_populated_markdown() -> None:
+    """Python-side invariant: insufficient_evidence=True with non-empty markdown must fail."""
+    with pytest.raises(ValidationError):
+        ReportSection(
+            audit_run_id="run-v4",
+            section_id="exec_summary",
+            markdown="should be empty when declined",
+            cited_finding_ids=[],
+            cited_turn_ids=[],
+            insufficient_evidence=True,
+            decline_reason="declined",
+            created_at=datetime.now(tz=UTC),
+        )
+
+
+def test_report_section_validator_rejects_insufficient_with_populated_turn_ids() -> None:
+    """Python-side invariant: insufficient_evidence=True with non-empty cited_turn_ids must fail."""
+    with pytest.raises(ValidationError):
+        ReportSection(
+            audit_run_id="run-v5",
+            section_id="exec_summary",
+            markdown="",
+            cited_finding_ids=[],
+            cited_turn_ids=["t1"],  # should be [] when declined
+            insufficient_evidence=True,
+            decline_reason="declined",
+            created_at=datetime.now(tz=UTC),
+        )
+
+
+def test_report_section_validator_rejects_populated_with_empty_markdown() -> None:
+    """Python-side invariant: insufficient_evidence=False with empty markdown must fail."""
+    with pytest.raises(ValidationError):
+        ReportSection(
+            audit_run_id="run-v6",
+            section_id="exec_summary",
+            markdown="",  # populated section must have non-empty markdown
+            cited_finding_ids=["f1"],
+            cited_turn_ids=[],
+            insufficient_evidence=False,
+            decline_reason=None,
+            created_at=datetime.now(tz=UTC),
+        )
