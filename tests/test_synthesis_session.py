@@ -7,7 +7,7 @@ The fake mimics just enough of the SDK surface for the event loop:
 
 The stream can be primed with a list of events; the driver consumes them
 in order, dispatches custom-tool calls through the registry, and stops
-on ``session.status_idle``.
+on ``session.finished``.
 
 Continuation-nudge tests intentionally absent — the feature was dropped
 from ``SynthesisSession`` (see module docstring).
@@ -186,10 +186,10 @@ def _make_session(client: _FakeClient, store: CorpusStore, run_id: str) -> Synth
 
 
 async def test_synthesis_session_runs_to_completion_with_fake_stream(tmp_path: Path) -> None:
-    """``session.status_idle`` terminates the event loop cleanly."""
+    """``session.finished`` terminates the event loop cleanly."""
     events: list[dict[str, Any]] = [
         {"type": "session.status_active"},
-        {"type": "session.status_idle"},
+        {"type": "session.finished"},
     ]
     stream = _FakeStreamCtx(events)
     client = _FakeClient(stream)
@@ -199,7 +199,7 @@ async def test_synthesis_session_runs_to_completion_with_fake_stream(tmp_path: P
         session = _make_session(client, store, run_id)
         outcome = await session.run(kickoff_message="Start synthesis")
         assert outcome.completed
-        assert outcome.reason == "session.status_idle"
+        assert outcome.reason == "session.finished"
         assert outcome.handles.agent_id == "agent-fake"
         assert outcome.handles.session_id == "sess-fake"
         # Kickoff sent immediately after opening the stream.
@@ -219,7 +219,7 @@ async def test_synthesis_session_dispatches_custom_tool_calls(tmp_path: Path) ->
             "input": {"stage": "planning", "message": "hi"},
             "id": "tu-1",
         },
-        {"type": "session.status_idle"},
+        {"type": "session.finished"},
     ]
     stream = _FakeStreamCtx(events)
     client = _FakeClient(stream)
@@ -265,7 +265,7 @@ async def test_synthesis_session_counts_write_report_section(tmp_path: Path) -> 
             },
             "id": "tu-write",
         },
-        {"type": "session.status_idle"},
+        {"type": "session.finished"},
     ]
     stream = _FakeStreamCtx(events)
     client = _FakeClient(stream)
@@ -284,7 +284,7 @@ async def test_synthesis_session_counts_write_report_section(tmp_path: Path) -> 
 
 async def test_synthesis_session_teardown_deletes_env_and_session(tmp_path: Path) -> None:
     """The per-run environment and session are deleted in the finally block."""
-    stream = _FakeStreamCtx([{"type": "session.status_idle"}])
+    stream = _FakeStreamCtx([{"type": "session.finished"}])
     client = _FakeClient(stream)
 
     store, run_id = _seed_store(tmp_path)
@@ -293,5 +293,61 @@ async def test_synthesis_session_teardown_deletes_env_and_session(tmp_path: Path
         outcome = await session.run(kickoff_message="kickoff")
         assert outcome.handles.environment_id in client.beta.environments.deleted_ids
         assert outcome.handles.session_id in client.beta.sessions.deleted_ids
+    finally:
+        store.close()
+
+
+async def test_synthesis_session_continues_past_status_idle(tmp_path: Path) -> None:
+    """``session.status_idle`` is transient — the loop must NOT break on it.
+
+    Live run run-0cc74fc5cdd2 (2026-04-24) showed that breaking on
+    ``session.status_idle`` after the first agent turn's
+    ``span.model_request_end`` cuts the session short, producing 0 tool
+    calls beyond the first. This test guards against the regression by
+    simulating an event stream that interleaves two tool_uses around an
+    idle transition: a buggy loop breaks at the first idle and sees only
+    1 tool call; the fix sees 2.
+    """
+    events: list[dict[str, Any]] = [
+        {"type": "session.status_running"},
+        {
+            "type": "agent.custom_tool_use",
+            "name": "log_progress",
+            "input": {"stage": "planning", "message": "turn one"},
+            "id": "tu-1",
+        },
+        {"type": "span.model_request_end"},
+        # Transient idle BETWEEN agent turns — pre-fix code broke here.
+        {"type": "session.status_idle"},
+        {"type": "session.status_running"},
+        {
+            "type": "agent.custom_tool_use",
+            "name": "log_progress",
+            "input": {"stage": "writing", "message": "turn two"},
+            "id": "tu-2",
+        },
+        {"type": "span.model_request_end"},
+        {"type": "session.finished"},
+    ]
+    stream = _FakeStreamCtx(events)
+    client = _FakeClient(stream)
+
+    store, run_id = _seed_store(tmp_path)
+    try:
+        session = _make_session(client, store, run_id)
+        outcome = await session.run(kickoff_message="multi-turn synthesis")
+        # Fix: BOTH tool calls dispatched, terminates on session.finished.
+        # Buggy: only 1 tool call dispatched, terminates on session.status_idle.
+        assert outcome.tool_calls == 2
+        assert outcome.completed
+        assert outcome.reason == "session.finished"
+        # Both tool_use ids were echoed back in user.custom_tool_result replies.
+        result_batches = [
+            batch
+            for batch in client.beta.sessions.events.sent_events
+            if batch[0]["type"] == "user.custom_tool_result"
+        ]
+        echoed_ids = [batch[0]["custom_tool_use_id"] for batch in result_batches]
+        assert echoed_ids == ["tu-1", "tu-2"]
     finally:
         store.close()

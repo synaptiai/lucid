@@ -297,6 +297,11 @@ class SynthesisSession:
                                     outcome.sections_written += 1
                         except Exception:
                             pass
+                    _LOGGER.info(
+                        "sending user.custom_tool_result for %s (tool_use_id=%s)",
+                        tool_name,
+                        result.tool_use_id,
+                    )
                     self.client.beta.sessions.events.send(
                         session_id,
                         events=[
@@ -310,7 +315,17 @@ class SynthesisSession:
                     )
                     continue
 
-                if evt_type in {"session.status_idle", "session.finished"}:
+                # `session.status_idle` is a TRANSIENT state — it fires between
+                # every agent turn (after model_request_end, while the server
+                # waits for our user.custom_tool_result or the next user.message).
+                # Breaking on it cuts the session after one agent turn. The real
+                # terminal event is `session.finished`. Genuine hangs (agent idle
+                # with nothing to respond to) are caught by the stall watchdog
+                # at heartbeat_stall_seconds (default 60s).
+                #
+                # See live run run-0cc74fc5cdd2 (2026-04-24) for the diagnostic
+                # event trace that identified this.
+                if evt_type == "session.finished":
                     outcome.completed = True
                     outcome.reason = str(evt_type)
                     break
