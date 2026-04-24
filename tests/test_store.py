@@ -15,6 +15,7 @@ from lucid.schemas import (
     CorpusStats,
     Finding,
     ModuleName,
+    ReportSection,
     Role,
     SamplingConfigRecord,
     Source,
@@ -655,3 +656,110 @@ def test_report_sections_check_section_id_length_cap(tmp_path):
                  "[]", "[]", 0, None, "2026-04-24T10:00:00+00:00"),
             )
             conn.commit()
+
+
+def test_upsert_report_section_roundtrip(tmp_path):
+    """Round-trip: upsert a section, fetch, assert equality on all fields."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store, run_id="run-ut2")
+        section = ReportSection(
+            audit_run_id="run-ut2",
+            section_id="exec_summary",
+            markdown="One paragraph with [F:f001].",
+            cited_finding_ids=["f001"],
+            cited_turn_ids=[],
+            insufficient_evidence=False,
+            decline_reason=None,
+            created_at=datetime(2026, 4, 24, 10, 0, tzinfo=UTC),
+        )
+        store.upsert_report_section(section)
+        rows = store.fetch_report_sections_for_run("run-ut2")
+        assert len(rows) == 1
+        assert rows[0] == section
+
+
+def test_upsert_report_section_is_idempotent(tmp_path):
+    """Re-running synthesis replaces the row rather than duplicating."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store, run_id="run-ut3")
+        section_v1 = ReportSection(
+            audit_run_id="run-ut3",
+            section_id="exec_summary",
+            markdown="version one",
+            cited_finding_ids=["f1"],
+            cited_turn_ids=[],
+            insufficient_evidence=False,
+            decline_reason=None,
+            created_at=datetime(2026, 4, 24, 10, 0, tzinfo=UTC),
+        )
+        store.upsert_report_section(section_v1)
+
+        section_v2 = ReportSection(
+            audit_run_id="run-ut3",
+            section_id="exec_summary",  # same section_id — should upsert
+            markdown="version two (overwrites)",
+            cited_finding_ids=["f2"],
+            cited_turn_ids=["t1"],
+            insufficient_evidence=False,
+            decline_reason=None,
+            created_at=datetime(2026, 4, 24, 11, 0, tzinfo=UTC),
+        )
+        store.upsert_report_section(section_v2)
+
+        rows = store.fetch_report_sections_for_run("run-ut3")
+        assert len(rows) == 1, "Upsert must not duplicate"
+        assert rows[0].markdown == "version two (overwrites)"
+        assert rows[0].cited_finding_ids == ["f2"]
+        assert rows[0].cited_turn_ids == ["t1"]
+
+
+def test_upsert_insufficient_evidence_section_roundtrip(tmp_path):
+    """Declined sections round-trip with empty fields + decline_reason preserved."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store, run_id="run-ut4")
+        section = ReportSection(
+            audit_run_id="run-ut4",
+            section_id="top_3_actions",
+            markdown="",
+            cited_finding_ids=[],
+            cited_turn_ids=[],
+            insufficient_evidence=True,
+            decline_reason="fewer than 5 qualifying findings",
+            created_at=datetime(2026, 4, 24, 10, 0, tzinfo=UTC),
+        )
+        store.upsert_report_section(section)
+        rows = store.fetch_report_sections_for_run("run-ut4")
+        assert len(rows) == 1
+        assert rows[0].insufficient_evidence is True
+        assert rows[0].decline_reason == "fewer than 5 qualifying findings"
+        assert rows[0].markdown == ""
+        assert rows[0].cited_finding_ids == []
+
+
+def test_fetch_report_sections_ordering(tmp_path):
+    """fetch_report_sections_for_run returns rows ordered by section_id ASC."""
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run(store, run_id="run-ut5")
+        for section_id in ["module_b_narrative", "exec_summary", "top_3_actions"]:
+            store.upsert_report_section(ReportSection(
+                audit_run_id="run-ut5",
+                section_id=section_id,
+                markdown=f"prose for {section_id}",
+                cited_finding_ids=[],
+                cited_turn_ids=[],
+                insufficient_evidence=False,
+                decline_reason=None,
+                created_at=datetime.now(tz=UTC),
+            ))
+        rows = store.fetch_report_sections_for_run("run-ut5")
+        assert [r.section_id for r in rows] == [
+            "exec_summary", "module_b_narrative", "top_3_actions",
+        ]

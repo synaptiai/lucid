@@ -13,6 +13,7 @@ dep is already pinned.
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,7 @@ from lucid.schemas import (
     ModuleProgress,
     ModuleProgressStatus,
     Project,
+    ReportSection,
     SamplingConfigRecord,
     Source,
     TokenUsage,
@@ -374,6 +376,81 @@ class CorpusStore:
                         datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
                     ),
                     error_message=row["error_message"],
+                )
+            )
+        return out
+
+    # ----- report sections (synthesis-layer prose) ------------------
+
+    def upsert_report_section(self, section: ReportSection) -> None:
+        """Insert or update one :class:`ReportSection` row.
+
+        Uses ``ON CONFLICT(audit_run_id, section_id) DO UPDATE SET ...``
+        so re-running synthesis against the same audit replaces the row
+        in place (matches the UNIQUE (audit_run_id, section_id) semantics
+        in ``store/schema.sql``). The row ``id`` is minted on first insert
+        and preserved across updates — the UPDATE only touches the data
+        columns, never ``id``.
+        """
+        now_iso = section.created_at.isoformat()
+        self.connect().execute(
+            """
+            INSERT INTO report_sections (
+                id, audit_run_id, section_id, markdown,
+                cited_finding_ids_json, cited_turn_ids_json,
+                insufficient_evidence, decline_reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (audit_run_id, section_id) DO UPDATE SET
+                markdown = excluded.markdown,
+                cited_finding_ids_json = excluded.cited_finding_ids_json,
+                cited_turn_ids_json = excluded.cited_turn_ids_json,
+                insufficient_evidence = excluded.insufficient_evidence,
+                decline_reason = excluded.decline_reason,
+                created_at = excluded.created_at
+            """,
+            (
+                f"rs-{uuid.uuid4().hex[:12]}",
+                section.audit_run_id,
+                section.section_id,
+                section.markdown,
+                orjson.dumps(section.cited_finding_ids).decode(),
+                orjson.dumps(section.cited_turn_ids).decode(),
+                1 if section.insufficient_evidence else 0,
+                section.decline_reason,
+                now_iso,
+            ),
+        )
+        self._commit()
+
+    def fetch_report_sections_for_run(self, audit_run_id: str) -> list[ReportSection]:
+        """Load every :class:`ReportSection` for ``audit_run_id``.
+
+        Rows are ordered by ``section_id`` ASC so downstream renderers
+        see a stable, alphabetical sequence regardless of insertion
+        order. SQLite returns ``insufficient_evidence`` as an ``int``
+        (0/1); we cast to ``bool`` on the way out to match the Pydantic
+        field type.
+        """
+        rows = self.fetchall(
+            "SELECT id, audit_run_id, section_id, markdown, "
+            "cited_finding_ids_json, cited_turn_ids_json, "
+            "insufficient_evidence, decline_reason, created_at "
+            "FROM report_sections WHERE audit_run_id = ? "
+            "ORDER BY section_id ASC",
+            (audit_run_id,),
+        )
+        out: list[ReportSection] = []
+        for row in rows:
+            out.append(
+                ReportSection(
+                    audit_run_id=row["audit_run_id"],
+                    section_id=row["section_id"],
+                    markdown=row["markdown"],
+                    cited_finding_ids=orjson.loads(row["cited_finding_ids_json"]),
+                    cited_turn_ids=orjson.loads(row["cited_turn_ids_json"]),
+                    insufficient_evidence=bool(row["insufficient_evidence"]),
+                    decline_reason=row["decline_reason"],
+                    created_at=datetime.fromisoformat(row["created_at"]),
                 )
             )
         return out

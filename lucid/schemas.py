@@ -19,7 +19,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ──────────────────────────────────────────────────────────────────────────
 # Enums
@@ -359,3 +359,43 @@ class ReportSection(BaseModel):
     insufficient_evidence: bool = False
     decline_reason: str | None = None
     created_at: datetime
+
+    @model_validator(mode="after")
+    def _check_insufficient_evidence_invariant(self) -> ReportSection:
+        """Mirror the SQL CHECK in ``store/schema.sql`` at the Pydantic layer.
+
+        Enforces the same two-direction invariant the DB enforces so
+        in-memory construction fails loudly on inconsistent state rather
+        than waiting for the INSERT to trip the CHECK constraint.
+        """
+        if self.insufficient_evidence:
+            if self.markdown != "":
+                raise ValueError(
+                    "insufficient_evidence=True requires markdown == ''; "
+                    f"got length {len(self.markdown)}"
+                )
+            if self.cited_finding_ids != []:
+                raise ValueError(
+                    "insufficient_evidence=True requires cited_finding_ids == []; "
+                    f"got {len(self.cited_finding_ids)} entries"
+                )
+            if self.cited_turn_ids != []:
+                raise ValueError(
+                    "insufficient_evidence=True requires cited_turn_ids == []; "
+                    f"got {len(self.cited_turn_ids)} entries"
+                )
+            if self.decline_reason is None or self.decline_reason.strip() == "":
+                raise ValueError(
+                    "insufficient_evidence=True requires a non-empty decline_reason"
+                )
+        else:
+            if self.markdown == "":
+                raise ValueError(
+                    "insufficient_evidence=False requires non-empty markdown"
+                )
+            if self.decline_reason is not None:
+                raise ValueError(
+                    "insufficient_evidence=False requires decline_reason is None; "
+                    f"got {self.decline_reason!r}"
+                )
+        return self

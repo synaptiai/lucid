@@ -361,3 +361,48 @@ def test_report_section_insufficient_evidence_allows_empty_prose() -> None:
         created_at=datetime.now(tz=UTC),
     )
     assert section.insufficient_evidence is True
+
+
+def test_report_section_validator_rejects_insufficient_with_populated_citations() -> None:
+    """Python-side invariant: insufficient_evidence=True with non-empty citations must fail."""
+    with pytest.raises(ValidationError):
+        ReportSection(
+            audit_run_id="run-v1",
+            section_id="exec_summary",
+            markdown="",
+            cited_finding_ids=["f1"],  # should be [] when declined
+            cited_turn_ids=[],
+            insufficient_evidence=True,
+            decline_reason="declined",
+            created_at=datetime.now(tz=UTC),
+        )
+
+
+def test_report_section_validator_rejects_populated_with_decline_reason() -> None:
+    """Python-side invariant: insufficient_evidence=False with non-null decline_reason must fail."""
+    with pytest.raises(ValidationError):
+        ReportSection(
+            audit_run_id="run-v2",
+            section_id="exec_summary",
+            markdown="populated prose",
+            cited_finding_ids=[],
+            cited_turn_ids=[],
+            insufficient_evidence=False,
+            decline_reason="should not be here",
+            created_at=datetime.now(tz=UTC),
+        )
+
+
+def test_report_section_validator_rejects_insufficient_without_decline_reason() -> None:
+    """Python-side invariant: insufficient_evidence=True requires non-empty decline_reason."""
+    with pytest.raises(ValidationError):
+        ReportSection(
+            audit_run_id="run-v3",
+            section_id="exec_summary",
+            markdown="",
+            cited_finding_ids=[],
+            cited_turn_ids=[],
+            insufficient_evidence=True,
+            decline_reason=None,
+            created_at=datetime.now(tz=UTC),
+        )
