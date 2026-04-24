@@ -466,16 +466,43 @@ def _get_usage_field(usage: Any, field_name: str) -> int | None:
     return None
 
 
+# Sentinel for end-of-iteration — ``asyncio.to_thread`` wraps
+# ``StopIteration`` into ``RuntimeError``, so we use a sentinel to signal
+# completion without the coercion.
+_STREAM_END: Any = object()
+
+
+def _safe_next(stream_iter: Any) -> Any:
+    """Sync helper: returns ``_STREAM_END`` when the iterator is exhausted."""
+    try:
+        return next(stream_iter)
+    except StopIteration:
+        return _STREAM_END
+
+
 async def _iter_stream(stream_ctx: Any) -> AsyncIterator[Any]:
-    """Normalize the SDK's stream iterator — sync context mgr or async."""
+    """Normalize the SDK's stream iterator — sync context mgr or async.
+
+    The sync path (``__enter__`` / for-loop iterator) is offloaded to
+    ``asyncio.to_thread`` so the blocking ``next()`` call doesn't pin the
+    event loop. Without this, the stall watchdog never fires when the
+    stream goes silent (Opus finishes writing but emits no
+    ``session.finished`` event), and the session hangs until something
+    external kills it. Regression: live run run-d049b5ac04df (2026-04-24)
+    sat idle for 3+ minutes after the final ``agent.message`` because
+    ``for event in stream`` blocked in C-land and ``await
+    asyncio.sleep(0)`` only yields BETWEEN events — never during the
+    block.
+    """
     context_mgr = stream_ctx
     if hasattr(context_mgr, "__enter__"):
         stream = context_mgr.__enter__()
         try:
-            for event in stream:
-                # Yield to the event loop so pending tool dispatches can
-                # make progress between events.
-                await asyncio.sleep(0)
+            stream_iter = iter(stream)
+            while True:
+                event = await asyncio.to_thread(_safe_next, stream_iter)
+                if event is _STREAM_END:
+                    break
                 yield event
         finally:
             context_mgr.__exit__(None, None, None)

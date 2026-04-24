@@ -15,6 +15,8 @@ from ``SynthesisSession`` (see module docstring).
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -349,5 +351,104 @@ async def test_synthesis_session_continues_past_status_idle(tmp_path: Path) -> N
         ]
         echoed_ids = [batch[0]["custom_tool_use_id"] for batch in result_batches]
         assert echoed_ids == ["tu-1", "tu-2"]
+    finally:
+        store.close()
+
+
+class _BlockingStreamCtx:
+    """Sync stream that yields one event then blocks forever in ``next()``.
+
+    Simulates the live SDK behaviour observed in run-d049b5ac04df: after
+    the agent emits its final text message the HTTP stream goes silent,
+    and the C-level ``next()`` call blocks waiting for bytes that never
+    arrive. The pre-fix ``_iter_stream`` would pin the event loop here
+    and the stall watchdog never got scheduled.
+    """
+
+    def __init__(self, first_event: dict[str, Any], block_seconds: float = 30.0) -> None:
+        self._first_event = first_event
+        self._block_seconds = block_seconds
+        self._emitted = False
+        # ``_release`` is set in ``__exit__`` so the blocked thread can
+        # unwind promptly when the session tears down — otherwise
+        # pytest waits for the full ``block_seconds`` at teardown.
+        self._release = threading.Event()
+        self.closed = False
+
+    def __enter__(self) -> _BlockingStreamCtx:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.closed = True
+        self._release.set()
+
+    def __iter__(self) -> _BlockingStreamCtx:
+        return self
+
+    def __next__(self) -> dict[str, Any]:
+        if not self._emitted:
+            self._emitted = True
+            return self._first_event
+        # Real blocking wait — this is the whole point of the test.
+        # Uses ``threading.Event.wait`` (which blocks the worker thread
+        # without yielding to the event loop, mimicking C-land HTTP
+        # reads) rather than ``time.sleep`` so teardown can release the
+        # thread instead of making pytest wait the full window.
+        # If the fix regresses, this will also pin the event loop and
+        # the watchdog won't fire.
+        self._release.wait(self._block_seconds)
+        raise StopIteration
+
+
+async def test_synthesis_session_stall_watchdog_fires_under_sync_iterator(
+    tmp_path: Path,
+) -> None:
+    """The stall watchdog must fire even when the SDK returns a sync
+    iterator that blocks between events.
+
+    Regression guard for live run run-d049b5ac04df (2026-04-24) where
+    the session hung 3+ minutes after Opus emitted a final text message
+    and went silent. Root cause: ``_iter_stream`` used a sync
+    ``for event in stream`` loop whose ``next()`` call blocked in
+    C-land; ``await asyncio.sleep(0)`` only yields BETWEEN events so
+    the watchdog task was never scheduled.
+
+    Simulates: sync stream emits one event, then blocks forever.
+    Expected: stall watchdog fires within ~stall_seconds and run()
+    returns with outcome.completed=False + reason containing
+    ``stalled``. Bounded wall-clock verifies the fix (the pre-fix path
+    would never return within the assertion window).
+    """
+    stream = _BlockingStreamCtx(first_event={"type": "session.status_running"})
+    client = _FakeClient(stream)  # type: ignore[arg-type]
+
+    store, run_id = _seed_store(tmp_path)
+    try:
+        registry = build_synthesis_registry(
+            store=store,
+            audit_run_id=run_id,
+            progress_log=lambda *_: None,
+        )
+        # Tight heartbeat so the test completes in ~1-2s.
+        config = SynthesisConfig(
+            run_id=run_id,
+            prompt_version="v1",
+            system_prompt="You are the Lucid synthesis agent.",
+            heartbeat_stall_seconds=1.0,
+            heartbeat_check_interval_seconds=0.2,
+        )
+        session = SynthesisSession(client=client, registry=registry, config=config)
+
+        start = time.monotonic()
+        outcome = await session.run(kickoff_message="begin")
+        elapsed = time.monotonic() - start
+
+        # The watchdog must have fired; the session is partial, not complete.
+        assert outcome.completed is False
+        assert "stalled" in outcome.reason
+        # Bounded wall time: heartbeat 1s + check interval 0.2s + slack.
+        # If the fix regresses and next() pins the loop, we'd sit here
+        # for block_seconds (30s) before anything could unwind.
+        assert elapsed < 5.0, f"run() took {elapsed:.2f}s — watchdog likely did not fire"
     finally:
         store.close()
