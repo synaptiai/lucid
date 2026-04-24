@@ -15,9 +15,18 @@ async def test_run_scoring_loop_invokes_every_enabled_module_in_order(monkeypatc
     the order supplied, passing the full conversation id list each
     time, and returns the per-module result dicts."""
     call_log: list[tuple[ModuleName, tuple[str, ...]]] = []
+    kwarg_keys_per_call: list[frozenset[str]] = []
 
-    async def _spy(*, module: ModuleName, conversation_ids: list[str], **_) -> dict[str, Any]:
+    # Capture the full kwarg set on every call so a future refactor that
+    # drops a forwarded kwarg (e.g. stops threading spend_tracker through
+    # run_audit → _run_scoring_loop → invoke_module_for_run) fails here
+    # instead of silently degrading at runtime. Guards against drift in
+    # Task 2.3's rewiring.
+    async def _spy(**kwargs: Any) -> dict[str, Any]:
+        module = kwargs["module"]
+        conversation_ids = kwargs["conversation_ids"]
         call_log.append((module, tuple(conversation_ids)))
+        kwarg_keys_per_call.append(frozenset(kwargs.keys()))
         return {"module": module.value, "status": "completed", "findings_stored": 0}
 
     monkeypatch.setattr("lucid.run.invoke_module_for_run", _spy)
@@ -55,6 +64,14 @@ async def test_run_scoring_loop_invokes_every_enabled_module_in_order(monkeypatc
     # Each module invocation is preceded by a "Running module X" progress line.
     running_lines = [m for level, m in progress if "Running module" in m]
     assert running_lines == ["Running module A", "Running module B", "Running module G"]
+    # Every call forwarded the full contract kwarg set — drift guard.
+    expected_kwargs = frozenset({
+        "module", "conversation_ids", "store", "audit_run_id",
+        "anthropic_client", "embedding_provider", "allow_module_d",
+        "progress_log", "per_module_usd", "debited_modules", "spend_tracker",
+    })
+    for keys in kwarg_keys_per_call:
+        assert keys == expected_kwargs
 
 
 @pytest.mark.asyncio
