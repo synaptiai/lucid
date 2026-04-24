@@ -208,6 +208,120 @@ def test_write_report_falls_back_on_empty_sections_list(
     assert "exec-summary agent-prose" not in html_text
 
 
+def test_write_report_inlines_top_3_actions_when_present(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """top_3_actions in report_sections renders agent prose, overriding
+    the deterministic top_actions block."""
+    audit_run = _build_minimal_audit_run()
+    section = ReportSection(
+        audit_run_id=audit_run.id,
+        section_id="top_3_actions",
+        markdown="**1.** Review conversation [F:f001].\n\n**2.** Note pattern [F:f002].",
+        cited_finding_ids=["f001", "f002"],
+        cited_turn_ids=[],
+        insufficient_evidence=False,
+        decline_reason=None,
+        created_at=datetime(2026, 4, 24, 10, 3, tzinfo=UTC),
+    )
+    path = write_report(
+        audit_run,
+        [],
+        output_dir=tmp_path,  # type: ignore[arg-type]
+        report_sections=[section],
+    )
+    html_text = path.read_text(encoding="utf-8")
+    assert 'class="actionable-summary agent-prose"' in html_text
+    assert "Review conversation" in html_text
+
+
+def test_write_report_inlines_per_module_narrative(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """module_a_narrative renders inside the Module A section."""
+    from lucid.schemas import Finding, ModuleName
+
+    audit_run = _build_minimal_audit_run()
+    # Seed a finding so the Module A section appears in sections loop.
+    f1 = Finding(
+        id="f-mod-a",
+        audit_run_id=audit_run.id,
+        conversation_id="c1",
+        turn_ids=["t1"],
+        turn_ids_hash="x" * 64,
+        module=ModuleName.A_SPIRALBENCH,
+        behavior="sycophancy",
+        intensity=2,
+        confidence=0.8,
+        explanation="e",
+        citation="Spiral-Bench v1.2",
+        detected_by=["claude-opus-4-7"],
+        detected_at=datetime.now(tz=UTC),
+        prompt_version="v1",
+        prompt_hash="h",
+    )
+    narrative = ReportSection(
+        audit_run_id=audit_run.id,
+        section_id="module_a_narrative",
+        markdown="Module A observed sycophancy at intensity 2 in [F:f-mod-a].",
+        cited_finding_ids=["f-mod-a"],
+        cited_turn_ids=[],
+        insufficient_evidence=False,
+        decline_reason=None,
+        created_at=datetime.now(tz=UTC),
+    )
+    path = write_report(
+        audit_run,
+        [f1],
+        output_dir=tmp_path,  # type: ignore[arg-type]
+        report_sections=[narrative],
+    )
+    html_text = path.read_text(encoding="utf-8")
+    assert "Module A observed sycophancy" in html_text
+    assert 'class="module-narrative agent-prose"' in html_text
+
+
+def test_write_report_shows_missing_synthesis_note_when_no_sections(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Without report_sections, a small banner explains why narrative is absent."""
+    audit_run = _build_minimal_audit_run()
+    path = write_report(
+        audit_run,
+        [],
+        output_dir=tmp_path,  # type: ignore[arg-type]
+        report_sections=None,
+    )
+    html_text = path.read_text(encoding="utf-8")
+    assert 'class="synthesis-missing-note"' in html_text
+    assert "no agent-written narrative" in html_text
+
+
+def test_write_report_hides_missing_note_when_any_section_present(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """The missing-synthesis banner does NOT show when at least one section exists."""
+    audit_run = _build_minimal_audit_run()
+    section = ReportSection(
+        audit_run_id=audit_run.id,
+        section_id="exec_summary",
+        markdown="Some prose [F:f1].",
+        cited_finding_ids=["f1"],
+        cited_turn_ids=[],
+        insufficient_evidence=False,
+        decline_reason=None,
+        created_at=datetime.now(tz=UTC),
+    )
+    path = write_report(
+        audit_run,
+        [],
+        output_dir=tmp_path,  # type: ignore[arg-type]
+        report_sections=[section],
+    )
+    html_text = path.read_text(encoding="utf-8")
+    assert 'class="synthesis-missing-note"' not in html_text
+
+
 def test_write_report_shows_declined_section(tmp_path: pytest.TempPathFactory) -> None:
     """insufficient_evidence sections render a 'Section skipped' message.
 

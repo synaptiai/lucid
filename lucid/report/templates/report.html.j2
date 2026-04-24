@@ -181,11 +181,50 @@
 </section>
 {% endif %}
 
-{# ───── Actionable Summary — three bullets pointing at real action ─────
-   Derived from the top-3 radar spokes. Each bullet names the module,
-   the concrete finding count, and a one-sentence recommendation that
-   doesn't require the reader to know the framework. #}
-{% if aggregate.top_actions %}
+{# ───── Actionable Summary — agent narrative if present, deterministic otherwise ─────
+   When the synthesis phase has written a ``top_3_actions`` section,
+   its markdown prose replaces the deterministic three-bullet block
+   below. Otherwise, the deterministic block (derived from the top-3
+   radar spokes) is the fallback. #}
+{% set top3 = report_sections.get("top_3_actions") if report_sections else None %}
+{% if top3 and not top3.insufficient_evidence %}
+<section class="actionable-summary agent-prose" aria-labelledby="action-h">
+  <p class="eyebrow" id="action-h">What to do about this run</p>
+  <h2 class="serif">Three concrete next steps</h2>
+  <div class="agent-markdown">
+    {{ top3.markdown | markdown_with_citations }}
+  </div>
+  <p class="agent-attribution muted">
+    Written by Claude Opus 4.7 via the Lucid synthesis session.
+    {% if top3.cited_finding_ids %}
+      Citations: {{ top3.cited_finding_ids | length }} finding{% if top3.cited_finding_ids | length != 1 %}s{% endif %} referenced.
+    {% endif %}
+  </p>
+  {% if aggregate.conversation_rankings %}
+  <div class="conv-rankings">
+    <h3 class="ranking-title">Conversations to review first</h3>
+    <ol class="ranking-list">
+      {% for conv in aggregate.conversation_rankings %}
+      <li>
+        <code>{{ conv.conversation_short }}…</code>
+        <span class="muted">
+          · {{ conv.total_findings }} finding{% if conv.total_findings != 1 %}s{% endif %}
+          {% if conv.max_intensity %}· peak intensity {{ conv.max_intensity }}{% endif %}
+          · dominant Module {{ conv.dominant_module_short }}
+          · weighted score {{ "%.2f"|format(conv.weighted_score) }}
+        </span>
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
+  {% endif %}
+</section>
+{% elif top3 and top3.insufficient_evidence %}
+<section class="actionable-summary agent-declined" aria-labelledby="action-h">
+  <p class="eyebrow" id="action-h">What to do about this run</p>
+  <p class="muted"><em>Section skipped: {{ top3.decline_reason }}</em></p>
+</section>
+{% elif aggregate.top_actions %}
 <section class="actionable-summary" aria-labelledby="action-h">
   <p class="eyebrow" id="action-h">What to do about this run</p>
   <h2 class="serif">Three concrete next steps, ranked by signal strength</h2>
@@ -407,6 +446,20 @@
     module. Each entry shows what was detected, why it matters, and
     the line of conversation that triggered it.
   </p>
+
+  {# Hybrid: when the synthesis phase has written a ``headline_findings``
+     section, its markdown renders as a lede paragraph above the
+     existing deterministic headline cards. The deterministic cards
+     below still render unchanged — agent prose adds to, does not
+     replace, the cross-module picks. #}
+  {% set hf = report_sections.get("headline_findings") if report_sections else None %}
+  {% if hf and not hf.insufficient_evidence %}
+  <div class="headline-lede agent-prose">
+    <div class="agent-markdown">{{ hf.markdown | markdown_with_citations }}</div>
+  </div>
+  {% elif hf and hf.insufficient_evidence %}
+  <p class="muted"><em>Headline framing skipped: {{ hf.decline_reason }}</em></p>
+  {% endif %}
 
   {# Lede: the #1 headline gets a magazine-style pull treatment so the
      reader instantly anchors on the most-impactful finding. The
@@ -634,6 +687,23 @@
     {% endif %}
   </div>
   <p class="module-description">{{ section.description }}</p>
+
+  {# Hybrid: when the synthesis phase has written a per-module
+     narrative for this module, render its prose between the module
+     description and the "About this module" explainer. Module G
+     never receives a narrative (attribution metadata, not a
+     behaviour). The explainer, stats table, and evidence cards below
+     always render — agent prose adds to, does not replace, the
+     deterministic scaffolding. #}
+  {% set module_letter = section.module.value | lower %}
+  {% set module_narrative = report_sections.get("module_" ~ module_letter ~ "_narrative") if report_sections else None %}
+  {% if module_narrative and not module_narrative.insufficient_evidence %}
+  <div class="module-narrative agent-prose">
+    <div class="agent-markdown">{{ module_narrative.markdown | markdown_with_citations }}</div>
+  </div>
+  {% elif module_narrative and module_narrative.insufficient_evidence %}
+  <p class="muted"><em>Module narrative skipped: {{ module_narrative.decline_reason }}</em></p>
+  {% endif %}
 
   {# "About this module" explainer — replaces the old single-line blurb
      with a four-part reader guide: hook, what it measures, why it
@@ -901,5 +971,22 @@
   {% endif %}
 </section>
 {% endfor %}
+
+{# ───── Missing-synthesis banner ─────
+   When no report_sections are threaded through (demo renders,
+   ``--no-synthesis`` runs, pre-synthesis reruns), surface a subtle
+   note explaining why the agent-written narrative surfaces above
+   are absent — so readers don't assume the deterministic-only
+   output is broken. #}
+{% if not report_sections %}
+<aside class="synthesis-missing-note" aria-label="Narrative sections missing">
+  <p class="muted" style="font-size: 0.85em; margin: 2rem 0; text-align: center;">
+    <strong>Note:</strong> this report has no agent-written narrative
+    sections. This is expected for demo renders and <code>--no-synthesis</code>
+    runs; live audits produce executive summary, top-3 actions, headline
+    framing, and per-module narratives written by Claude Opus 4.7.
+  </p>
+</aside>
+{% endif %}
 
 {% endblock %}

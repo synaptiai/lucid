@@ -361,6 +361,15 @@ def main() -> None:
     print(f"Wrote demo report: {out}")
     print(f"Size: {size_kb:.1f} KB")
     print("Open in a browser to see how Lucid's audit output looks.")
+    print()
+    print(
+        "Note: this demo omits agent-written narrative sections "
+        "(executive summary, top actions, headlines, per-module prose). "
+        "In a real `lucid audit` run, those sections are written by "
+        "Claude Opus 4.7 via the Lucid synthesis session. "
+        "The deterministic scaffolding (charts, tables, evidence cards) "
+        "renders identically in both demo and live runs."
+    )
 
 
 if __name__ == "__main__":

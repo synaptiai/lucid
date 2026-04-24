@@ -1920,6 +1920,13 @@ def _headline_findings(
     so five ``H/unsupported`` findings don't fill every hero slot
     with the same headline. A second pass backfills any remaining
     slots with the next-best findings regardless of pair.
+
+    Note: this remains the primary driver of the headline cards even
+    when ``report_sections`` provides a ``headline_findings`` entry —
+    the agent-written markdown renders as a lede *above* the cards,
+    not as a replacement. It's also the sole source when no agent
+    prose is available (demo renders, ``--no-synthesis`` runs). If
+    you're refactoring, preserve it.
     """
     candidates = [
         f
@@ -2580,6 +2587,11 @@ def _compute_top_actions(
     Filters out spokes with zero findings (nothing to recommend) and
     spokes with no registered action template. Returns up to
     ``TOP_ACTIONS_SHOWN`` items, sorted by spoke score descending.
+
+    Fallback derivation used when ``report_sections`` lacks a
+    matching agent-written ``top_3_actions`` entry. If you're
+    refactoring, preserve it — the demo renders and ``--no-synthesis``
+    runs rely on it.
     """
     by_module_findings: dict[ModuleName, list[Finding]] = {}
     for f in findings_list:
