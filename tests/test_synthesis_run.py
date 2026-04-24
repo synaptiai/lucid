@@ -185,6 +185,91 @@ async def test_run_synthesis_session_counts_written_and_declined(tmp_path, monke
     assert result.session_outcome is fake_outcome
 
 
+async def test_run_synthesis_session_calls_sonnet_post_process(tmp_path, monkeypatch):
+    """When async_client is provided and sections are populated,
+    run_synthesis_session invokes post_process_sections and persists
+    the enriched sections back to the DB."""
+    from lucid.schemas import ReportSection, SynthesisBlock
+    from lucid.store.init import initialize_db
+    from lucid.store.sqlite import CorpusStore
+    from lucid.synthesis.session import SynthesisHandles, SynthesisOutcome
+
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run_inline(store, run_id="run-pp-int")
+
+        # Pre-populate a populated section (as if the agent just wrote it).
+        store.upsert_report_section(
+            ReportSection(
+                audit_run_id="run-pp-int",
+                section_id="exec_summary",
+                markdown="Prose about something.",
+                cited_finding_ids=[],
+                cited_turn_ids=[],
+                insufficient_evidence=False,
+                decline_reason=None,
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+
+        # Mock SynthesisSession.run() to return an idle outcome.
+        fake_outcome = SynthesisOutcome(
+            handles=SynthesisHandles(agent_id="a", environment_id="e", session_id="s"),
+            completed=True,
+            reason="session.status_idle",
+        )
+
+        async def _ok(*_args, **_kwargs):
+            return fake_outcome
+
+        monkeypatch.setattr("lucid.synthesis.run.SynthesisSession.run", _ok)
+
+        # Mock post_process_sections to return enriched section.
+        async def _fake_post_process(*, async_client, sections, **_kwargs):
+            enriched = []
+            for s in sections:
+                if s.insufficient_evidence:
+                    enriched.append(s)
+                else:
+                    enriched.append(
+                        s.model_copy(
+                            update={
+                                "blocks": [
+                                    SynthesisBlock(
+                                        text="Prose about something.", citations=[]
+                                    )
+                                ],
+                                "citation_confidence": 0.75,
+                            }
+                        )
+                    )
+            return enriched
+
+        monkeypatch.setattr(
+            "lucid.synthesis.run.post_process_sections", _fake_post_process
+        )
+
+        async_client_mock = MagicMock()
+        result = await run_synthesis_session(
+            client=MagicMock(),
+            async_client=async_client_mock,
+            store=store,
+            audit_run_id="run-pp-int",
+            enabled_modules=["A"],
+            behavior_counts={},
+            corpus_stats={"sampled_conversations": 1, "sampled_turns": 5},
+            progress_log=lambda *_: None,
+        )
+        assert result.sections_written == 1
+
+        # Verify the enriched section was upserted.
+        rows = store.fetch_report_sections_for_run("run-pp-int")
+        assert len(rows) == 1
+        assert len(rows[0].blocks) == 1
+        assert rows[0].citation_confidence == 0.75
+
+
 async def test_run_synthesis_session_runs_validators_over_persisted_sections(tmp_path, monkeypatch):
     """After a successful session, the three validators run over the
     persisted sections (aggregate / superlative / uncited-high-intensity)."""

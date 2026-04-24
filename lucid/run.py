@@ -495,6 +495,7 @@ def run_audit(
                 try:
                     _run_synthesis_phase(
                         client=client,
+                        async_client=async_client,
                         store=store,
                         run_id=resolved_run_id,
                         enabled_modules=enabled_modules,
@@ -658,6 +659,7 @@ async def _execute_scoring(
 def _run_synthesis_phase(
     *,
     client: Anthropic,
+    async_client: AsyncAnthropic,
     store: CorpusStore,
     run_id: str,
     enabled_modules: list[ModuleName],
@@ -671,6 +673,10 @@ def _run_synthesis_phase(
     and the asyncio invocation has one owner. Swallows nothing; errors
     from the synthesis session itself are captured by
     :func:`run_synthesis_session` into its return value, not raised.
+
+    ``async_client`` is forwarded to ``run_synthesis_session`` so the
+    Sonnet 4.6 post-processor (Phase 5.6b) can structure each Opus
+    section's markdown into :class:`~lucid.schemas.SynthesisBlock` lists.
 
     The import is local so the synthesis package (which pulls in the
     Managed Agents SDK surface) never loads on dry-run / no-synthesis
@@ -686,6 +692,7 @@ def _run_synthesis_phase(
     synthesis_result = asyncio.run(
         run_synthesis_session(
             client=client,
+            async_client=async_client,
             store=store,
             audit_run_id=run_id,
             enabled_modules=[m.value for m in enabled_modules],

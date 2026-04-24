@@ -17,10 +17,16 @@ and the writer can re-issue the call with corrected ids. We enforce a
 ceiling in :func:`~lucid.synthesis.tools.make_write_report_section_tool`
 so pathological failures don't loop forever.
 
-Phase 5.6 / post-ship: Sonnet 4.6 post-processor that structures Opus
+Phase 5.6b (this file): Sonnet 4.6 post-processor that structures Opus
 markdown into :class:`~lucid.schemas.SynthesisSectionOutput` blocks via
-``messages.parse()``. Deferred — the report template can render Opus's
-raw markdown directly with a Jinja ``[F:id]`` filter.
+``messages.parse()``. Wired into :func:`run_synthesis_session` via the
+``async_client`` kwarg — when wired, each populated section gets
+enriched with :class:`~lucid.schemas.SynthesisBlock` lists + a
+``citation_confidence`` score and upserted back to the DB. When
+``async_client`` is ``None`` (tests, dry-run paths) the post-process
+is skipped cleanly. Failures degrade gracefully — the report still
+renders from raw markdown via the ``markdown_with_citations`` Jinja
+filter (Checkpoint B).
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 from lucid.prompts import load_prompt
 from lucid.synthesis import SYNTHESIS_PROMPT_VERSION
+from lucid.synthesis.post_process import post_process_sections
 from lucid.synthesis.session import (
     SynthesisConfig,
     SynthesisOutcome,
@@ -46,6 +53,8 @@ from lucid.synthesis.validators import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover
+    from anthropic import AsyncAnthropic
+
     from lucid.store.sqlite import CorpusStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -157,6 +166,7 @@ async def run_synthesis_session(
     corpus_stats: dict[str, Any],
     progress_log: Callable[[str, str], None],
     max_regen_attempts: int = 2,
+    async_client: AsyncAnthropic | None = None,
 ) -> SynthesisRunResult:
     """Execute the synthesis phase for an already-scored audit run.
 
@@ -166,9 +176,16 @@ async def run_synthesis_session(
     3. Spins up :class:`SynthesisSession`; runs it until idle/stalled.
     4. Reads back the persisted :class:`~lucid.schemas.ReportSection`
        rows.
-    5. Applies aggregate + superlative + uncited-high-intensity
-       validators over the persisted sections + the run's findings.
-    6. Returns a :class:`SynthesisRunResult` with counters + any
+    5. (Phase 5.6b) If ``async_client`` is wired, runs the Sonnet 4.6
+       post-processor over each populated section to structure the raw
+       Opus markdown into :class:`~lucid.schemas.SynthesisBlock` lists +
+       a per-section ``citation_confidence`` score. Enriched sections
+       are upserted back to the DB; failures log a warning and leave
+       the original section untouched (still renderable from markdown).
+    6. Applies aggregate + superlative + uncited-high-intensity
+       validators over the (possibly enriched) sections + the run's
+       findings.
+    7. Returns a :class:`SynthesisRunResult` with counters + any
        validation concerns. Never raises: the session may partially
        fail, the validators may emit warnings, neither should abort
        the enclosing audit run.
@@ -240,6 +257,49 @@ async def run_synthesis_session(
         "turn": int(corpus_stats.get("sampled_turns") or 0),
         "finding": sum(behavior_counts.values()),
     }
+
+    # Phase 5.6b — Sonnet 4.6 post-process. Structures each populated
+    # section's raw Opus markdown into SynthesisBlocks + a citation-
+    # confidence score. Declined sections pass through untouched.
+    # Failures log a warning and leave the section unchanged — the
+    # report still renders from markdown alone (graceful degradation).
+    if async_client is not None and sections:
+        findings_for_validation = store.fetch_findings_for_run(audit_run_id)
+        valid_finding_ids = [f.id for f in findings_for_validation]
+        # Valid turn-id set = union of already-cited turns across
+        # sections. The writer can only cite turns it actually fetched
+        # via get_turn_window, and those ids are already persisted in
+        # ``section.cited_turn_ids`` — a richer valid set would require
+        # querying the turns table and doesn't buy anything.
+        valid_turn_ids_set: set[str] = set()
+        for s in sections:
+            valid_turn_ids_set.update(s.cited_turn_ids)
+        valid_turn_ids = list(valid_turn_ids_set)
+        try:
+            enriched = await post_process_sections(
+                async_client=async_client,
+                sections=sections,
+                valid_finding_ids=valid_finding_ids,
+                valid_turn_ids=valid_turn_ids,
+                tool_call_counts=tool_call_counts,
+            )
+            for original, updated in zip(sections, enriched, strict=True):
+                if (
+                    updated.blocks != original.blocks
+                    or updated.citation_confidence != original.citation_confidence
+                ):
+                    store.upsert_report_section(updated)
+            # Downstream validators read the (possibly enriched) list.
+            sections = enriched
+            progress_log(
+                "INFO",
+                f"Sonnet post-processed {sum(1 for s in enriched if s.blocks)} sections",
+            )
+        except Exception as err:  # outer guard; per-section failures are already
+            # swallowed inside post_process_sections, but defence in depth keeps
+            # one pathological crash from aborting the validators.
+            _LOGGER.exception("Sonnet post-process batch failed")
+            progress_log("WARN", f"Sonnet post-process failed: {err} (continuing)")
     all_errors: list[ValidationError] = []
     for section in sections:
         if section.insufficient_evidence:
