@@ -62,7 +62,7 @@ from lucid.store import SCHEMA_VERSION, initialize_db
 from lucid.store.sqlite import CorpusStore
 
 if TYPE_CHECKING:  # pragma: no cover
-    from anthropic import AsyncAnthropic
+    from anthropic import Anthropic, AsyncAnthropic
 
     from lucid.modules.embeddings import EmbeddingProvider
     from lucid.sampling import SamplingConfig
@@ -254,6 +254,20 @@ def _count_findings(store: CorpusStore, run_id: str) -> int:
     return int(rows[0]["n"]) if rows else 0
 
 
+def _behavior_counts_for_run(store: CorpusStore, run_id: str) -> dict[str, int]:
+    """Aggregate findings by ``behavior`` label for ``run_id``.
+
+    Feeds the synthesis kickoff's thin-evidence hedging block. Pulls
+    from the already-persisted findings table — the scoring loop has
+    finished by the time synthesis runs, so the counts are authoritative.
+    """
+    rows = store.fetchall(
+        "SELECT behavior, COUNT(*) AS n FROM findings WHERE audit_run_id = ? GROUP BY behavior",
+        (run_id,),
+    )
+    return {str(row["behavior"]): int(row["n"]) for row in rows}
+
+
 def _render_report_or_log(
     *,
     store: CorpusStore,
@@ -312,6 +326,8 @@ def run_audit(
     lock_timeout_seconds: float = 0.1,
     run_id: str | None = None,
     report_dir: Path = DEFAULT_REPORT_DIR,
+    client: Anthropic | None = None,
+    synthesis_enabled: bool = True,
 ) -> AuditResult:
     """Execute a non-dry-run audit end-to-end.
 
@@ -323,6 +339,20 @@ def run_audit(
         Modules unit-test against ``AsyncMock`` clients of this same
         shape; passing a sync client would silently block the event
         loop on every classification call.
+    client
+        Optional synchronous :class:`Anthropic` client. Required iff
+        ``synthesis_enabled`` is True: the Managed Agents beta API
+        (``client.beta.agents`` / ``sessions`` / ``environments``) is
+        synchronous in the SDK, so the synthesis phase needs a sync
+        handle. When ``None`` or ``synthesis_enabled=False``, the
+        synthesis phase is skipped cleanly — the scoring findings are
+        already persisted and the HTML report still renders.
+    synthesis_enabled
+        Whether to run the synthesis phase (Opus 4.7 writer) after
+        scoring completes. Default True. Gated by ``--no-synthesis``
+        at the CLI. Synthesis only runs when scoring finished with
+        status ``completed`` or ``partial`` (not ``failed``), and
+        when a sync ``client`` is wired.
     embedding_provider
         Optional :class:`~lucid.modules.embeddings.EmbeddingProvider`
         for Module H. ``None`` makes Module H return
@@ -437,6 +467,30 @@ def run_audit(
                 _LOGGER.exception("audit scoring raised")
                 status = "failed"
                 reason = f"exception: {err}"
+
+            # Synthesis phase — Opus 4.7 writer session. Only fires when
+            # scoring didn't hard-fail and the caller wired a sync
+            # ``client`` (Managed Agents beta surface is synchronous).
+            # The phase's own exceptions are caught inside
+            # ``run_synthesis_session``; here we swallow one more layer
+            # so the scoring findings + report still ship if the
+            # synthesis phase itself raises before returning.
+            if synthesis_enabled and client is not None and status in {"completed", "partial"}:
+                try:
+                    _run_synthesis_phase(
+                        client=client,
+                        store=store,
+                        run_id=resolved_run_id,
+                        enabled_modules=enabled_modules,
+                        sampled_ids=sampled_ids,
+                        sampled_turns=sum(
+                            len(inputs.turns_by_conv.get(cid, [])) for cid in sampled_ids
+                        ),
+                        progress_log=progress_log,
+                    )
+                except Exception as err:  # pragma: no cover — defence in depth
+                    _LOGGER.exception("synthesis phase raised outside its error handler")
+                    progress_log("WARN", f"synthesis phase crashed: {err}")
 
             # Finalize the audit_run row BEFORE rendering: the report
             # reads status + completed_at from this row, and rendering
@@ -583,6 +637,55 @@ async def _execute_scoring(
     failing = [r for r in results if r.get("status") not in _NON_FAILURE_STATUSES]
     partial_reasons = [f"{r.get('module')}={r.get('status')}" for r in failing]
     return "partial", f"partial: {', '.join(partial_reasons)}"
+
+
+def _run_synthesis_phase(
+    *,
+    client: Anthropic,
+    store: CorpusStore,
+    run_id: str,
+    enabled_modules: list[ModuleName],
+    sampled_ids: list[str],
+    sampled_turns: int,
+    progress_log: Callable[[str, str], None],
+) -> None:
+    """Invoke :func:`lucid.synthesis.run_synthesis_session` and log results.
+
+    Pulled out of ``run_audit`` so the conditional wiring stays readable
+    and the asyncio invocation has one owner. Swallows nothing; errors
+    from the synthesis session itself are captured by
+    :func:`run_synthesis_session` into its return value, not raised.
+
+    The import is local so the synthesis package (which pulls in the
+    Managed Agents SDK surface) never loads on dry-run / no-synthesis
+    paths.
+    """
+    from lucid.synthesis.run import run_synthesis_session
+
+    behavior_counts = _behavior_counts_for_run(store, run_id)
+    corpus_stats = {
+        "sampled_conversations": len(sampled_ids),
+        "sampled_turns": sampled_turns,
+    }
+    synthesis_result = asyncio.run(
+        run_synthesis_session(
+            client=client,
+            store=store,
+            audit_run_id=run_id,
+            enabled_modules=[m.value for m in enabled_modules],
+            behavior_counts=behavior_counts,
+            corpus_stats=corpus_stats,
+            progress_log=progress_log,
+        )
+    )
+    progress_log(
+        "INFO",
+        (
+            f"Synthesis: {synthesis_result.sections_written} written, "
+            f"{synthesis_result.sections_declined} declined, "
+            f"{len(synthesis_result.validation_errors)} validation concerns"
+        ),
+    )
 
 
 __all__ = [

@@ -75,6 +75,8 @@ def _find_unknown_turn_ids(store: CorpusStore, cited_ids: list[str]) -> list[str
 def make_write_report_section_tool(
     store: CorpusStore,
     audit_run_id: str,
+    *,
+    max_regen_attempts: int = 2,
 ) -> CustomTool:
     """Validated persistence of one agent-written narrative section.
 
@@ -91,12 +93,42 @@ def make_write_report_section_tool(
     All failures are structured error payloads, not raises — the
     Managed Agents event loop treats one bad tool call as a recoverable
     routing error rather than a session abort.
+
+    **Regen cap (Task 5.4).** Each call increments a per-section attempt
+    counter scoped to this factory's closure (one counter per tool
+    registry). When the counter exceeds ``max_regen_attempts + 1`` for a
+    given ``section_id``, the handler returns
+    ``{"error": "regen_limit_exceeded", ...}`` so the writer moves on
+    to the next section instead of looping forever on a pathological
+    citation-validation failure. The default cap is 2 retries (3 total
+    attempts) per section.
     """
+    # Per-section attempt counter. Scoped to this factory invocation so
+    # two synthesis runs share nothing; a fresh registry per audit run
+    # guarantees the counter starts empty. The counter ticks on every
+    # call — successful writes don't reset it because a successful write
+    # is terminal (either the section persists or the agent declines),
+    # so the counter only meaningfully grows on repeated failures.
+    _attempt_counts: dict[str, int] = {}
 
     async def _handler(args: dict[str, Any]) -> dict[str, Any]:
         section_id = str(args.get("section_id") or "")
         if not section_id:
             return {"error": "missing_section_id"}
+
+        _attempt_counts[section_id] = _attempt_counts.get(section_id, 0) + 1
+        # Initial write + max_regen_attempts retries = (max_regen_attempts + 1)
+        # total permissible calls per section. The (N+1)th retry is rejected.
+        if _attempt_counts[section_id] > max_regen_attempts + 1:
+            return {
+                "error": "regen_limit_exceeded",
+                "section_id": section_id,
+                "attempts": _attempt_counts[section_id],
+                "message": (
+                    f"Section {section_id!r} exceeded the "
+                    f"{max_regen_attempts}-retry cap. Move to the next section."
+                ),
+            }
 
         insufficient = bool(args.get("insufficient_evidence", False))
         decline_reason = args.get("decline_reason")
@@ -210,12 +242,18 @@ def build_synthesis_registry(
     store: CorpusStore,
     audit_run_id: str,
     progress_log: Callable[[str, str], None],
+    max_regen_attempts: int = 2,
 ) -> ToolRegistry:
     """Wire up the synthesis session's tool registry.
 
     5 read-only tools shared with the orchestrator/scoring registry
     (via module-level factories in :mod:`lucid.orchestrator.tools`)
     plus ``write_report_section`` for persisting validated prose.
+
+    ``max_regen_attempts`` caps how many times the writer may retry
+    ``write_report_section`` for the same ``section_id`` before the
+    handler rejects the call with ``regen_limit_exceeded``. See
+    :func:`make_write_report_section_tool` for the semantics.
     """
     registry = ToolRegistry()
     registry.register(make_query_corpus_tool(store))
@@ -223,7 +261,9 @@ def build_synthesis_registry(
     registry.register(make_get_turn_window_tool(store))
     registry.register(make_get_findings_tool(store, audit_run_id))
     registry.register(make_log_progress_tool(progress_log))
-    registry.register(make_write_report_section_tool(store, audit_run_id))
+    registry.register(
+        make_write_report_section_tool(store, audit_run_id, max_regen_attempts=max_regen_attempts)
+    )
     return registry
 
 

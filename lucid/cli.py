@@ -211,6 +211,18 @@ def audit(
         str,
         typer.Option("--log-level", help="Logging level: DEBUG, INFO, WARNING, ERROR."),
     ] = "INFO",
+    synthesis: Annotated[
+        bool,
+        typer.Option(
+            "--synthesis/--no-synthesis",
+            help=(
+                "Run the Opus 4.7 synthesis phase after scoring. Default on. "
+                "Pass --no-synthesis to stop after the deterministic scoring "
+                "loop — findings still persist, report still renders, but "
+                "narrative sections are skipped."
+            ),
+        ),
+    ] = True,
 ) -> None:
     """Run an audit on a conversation corpus."""
     configure_logging(log_level)
@@ -309,8 +321,17 @@ def audit(
     allow_module_d = ModuleName.D_PERSPECTIVE in enabled
 
     data_dir = Path(".lucid")
+    sync_client: Anthropic | None
     try:
-        async_client = _build_async_anthropic_client_or_exit()
+        # Synthesis needs the sync ``Anthropic()`` surface for
+        # ``beta.agents`` / ``beta.sessions`` / ``beta.environments``.
+        # When synthesis is disabled, the detection modules only need
+        # the async client, so we skip the (trivial) sync allocation.
+        if synthesis:
+            sync_client, async_client = _build_anthropic_clients_or_exit()
+        else:
+            sync_client = None
+            async_client = _build_async_anthropic_client_or_exit()
     except ImportError as err:
         _CONSOLE.print(f"[red]Anthropic SDK not installed:[/red] {err}")
         raise typer.Exit(EXIT_USAGE) from err
@@ -343,6 +364,8 @@ def audit(
             prompt_versions=prompt_versions,
             progress_log=_progress,
             run_id=run_id,
+            client=sync_client,
+            synthesis_enabled=synthesis,
         )
     except LockHeldError as err:
         _CONSOLE.print(f"[red]Lock held:[/red] {err}")

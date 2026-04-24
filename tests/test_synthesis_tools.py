@@ -275,6 +275,46 @@ async def test_write_report_section_missing_decline_reason(tmp_path):
         assert store.fetch_report_sections_for_run("run-write-4") == []
 
 
+@pytest.mark.asyncio
+async def test_write_report_section_cap_limits_retry_attempts(tmp_path):
+    """After ``max_regen_attempts + 1`` calls for the same ``section_id``,
+    the handler rejects with ``regen_limit_exceeded`` so the writer
+    moves on instead of looping forever on a pathological failure."""
+    from lucid.store.init import initialize_db
+    from lucid.store.sqlite import CorpusStore
+    from lucid.synthesis.tools import make_write_report_section_tool
+
+    db = tmp_path / "lucid.sqlite3"
+    initialize_db(db)
+    with CorpusStore(db) as store:
+        _seed_audit_run_inline(store, run_id="run-cap1")
+        tool = make_write_report_section_tool(store, "run-cap1", max_regen_attempts=2)
+        # 3 attempts (1 original + 2 retries) should pass the cap check,
+        # each returning ``unknown_ids`` because the cited finding id
+        # does not exist — but none hit ``regen_limit_exceeded`` yet.
+        for _ in range(3):
+            result = await tool.handler(
+                {
+                    "section_id": "exec_summary",
+                    "markdown": "attempt with [F:does-not-exist]",
+                    "cited_finding_ids": ["does-not-exist"],
+                }
+            )
+            assert result.get("error") == "unknown_ids"
+        # The 4th attempt exceeds the cap and is rejected before
+        # touching the DB.
+        result = await tool.handler(
+            {
+                "section_id": "exec_summary",
+                "markdown": "one more attempt",
+                "cited_finding_ids": [],
+            }
+        )
+        assert result.get("error") == "regen_limit_exceeded"
+        assert result["section_id"] == "exec_summary"
+        assert result["attempts"] == 4
+
+
 def test_synthesis_registry_shares_read_only_factories_with_orchestrator(tmp_path):
     """The read-only handlers used by synthesis come from the same factories
     ``build_tool_registry`` uses — guards against divergence."""

@@ -26,6 +26,11 @@ from lucid.synthesis.tools import build_synthesis_registry
 # ``version`` frontmatter when shipping a prompt revision.
 SYNTHESIS_PROMPT_VERSION = "v1"
 
+# ``run`` is imported lazily (below) to avoid a circular import:
+# lucid.synthesis.run imports lucid.synthesis.SYNTHESIS_PROMPT_VERSION
+# from this module at import time.
+from lucid.synthesis.run import SynthesisRunResult, run_synthesis_session  # noqa: E402
+
 __all__ = [
     "MANAGED_AGENTS_BETA_HEADER",
     "SYNTHESIS_PROMPT_VERSION",
@@ -33,7 +38,9 @@ __all__ = [
     "SynthesisConfig",
     "SynthesisHandles",
     "SynthesisOutcome",
+    "SynthesisRunResult",
     "SynthesisSession",
     "build_synthesis_registry",
     "dispatch_tool_call",
+    "run_synthesis_session",
 ]
