@@ -73,6 +73,21 @@ FILELOCK_SUFFIX = ".lucid.lock"
 
 DEFAULT_REPORT_DIR = Path("report")
 
+# Per-module statuses that must NOT flip the audit to "partial". These
+# are documented, intentional outcomes — running the correct code path
+# for the caller's configuration — not failures:
+#   - "completed":              module ran end-to-end.
+#   - "skipped":                Module D opted out via --no-include-module-d.
+#   - "no_embedding_provider":  Module H ran with VOYAGE_API_KEY unset; the
+#                               dispatcher short-circuits rather than
+#                               fabricate embeddings.
+#   - "no_client":              an LLM module ran without ANTHROPIC_API_KEY
+#                               (typical in dry-run paths wired through
+#                               the scoring loop for validation).
+# Anything outside this set (e.g. "failed", exception propagations) flips
+# the audit to "partial" and is surfaced in the reason string.
+_NON_FAILURE_STATUSES = frozenset({"completed", "skipped", "no_embedding_provider", "no_client"})
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Errors
@@ -388,13 +403,26 @@ def run_audit(
             )
 
             sampled_ids = [c.id for c in inputs.sampled]
+
+            # Defensively ensure attribution runs. The CLI appends G
+            # explicitly (cli.py:244-245), but a non-CLI caller — a
+            # future ``lucid ask`` mode, a test harness, or a
+            # calibration pipeline reusing this driver — could omit
+            # it and produce a report with empty month/model charts.
+            # ``AuditInputs`` is frozen, so copy to a local list
+            # before appending. Idempotent: skipped if already present.
+            enabled_modules = list(inputs.enabled_modules)
+            if ModuleName.G_ATTRIBUTION not in enabled_modules:
+                enabled_modules.append(ModuleName.G_ATTRIBUTION)
+                _LOGGER.debug("Auto-appending Module G (attribution) to enabled_modules")
+
             try:
                 status, reason = asyncio.run(
                     _execute_scoring(
                         store=store,
                         registry=registry,
                         audit_run_id=resolved_run_id,
-                        enabled_modules=inputs.enabled_modules,
+                        enabled_modules=enabled_modules,
                         sampled_ids=sampled_ids,
                         progress_log=progress_log,
                         anthropic_client=async_client,
@@ -517,11 +545,14 @@ async def _execute_scoring(
 
     Wraps :func:`_run_scoring_loop` with outcome aggregation. Each
     module returns a status string; the audit is ``completed`` iff
-    every module returned ``status="completed"``, otherwise
-    ``partial``. Per-conversation errors (``module_errors`` in the
-    result dict) do NOT flip the overall status — those are documented
-    diagnostics, not failures. Transport-level exceptions propagate
-    from the loop and are caught by :func:`run_audit`.
+    every module returned a status in :data:`_NON_FAILURE_STATUSES`
+    (successful run or documented intentional gate — Module D opt-out,
+    Voyage not configured, dry-run without ANTHROPIC_API_KEY).
+    Anything else flips the overall status to ``partial``.
+    Per-conversation errors (``module_errors`` in the result dict) do
+    NOT flip the overall status — those are documented diagnostics,
+    not failures. Any exceptions propagate from the loop and are
+    caught by :func:`run_audit`.
 
     The ``registry`` parameter is retained for future synthesis-phase
     wiring (Phase 5 will thread it through to a second coroutine
@@ -541,12 +572,16 @@ async def _execute_scoring(
         debited_modules=debited_modules,
         spend_tracker=spend_tracker,
     )
-    all_completed = all(r.get("status") == "completed" for r in results)
-    if all_completed:
-        return "completed", "all modules completed"
-    partial_reasons = [
-        f"{r.get('module')}={r.get('status')}" for r in results if r.get("status") != "completed"
-    ]
+    # Intentional gates — Module D opted out, Voyage not configured, dry-run
+    # without ANTHROPIC_API_KEY — are documented successful outcomes, not
+    # failures. Conflating them with partial was user-facing wrong: an audit
+    # without VOYAGE_API_KEY would exit non-zero even though every module ran
+    # its correct path.
+    non_failing_count = sum(1 for r in results if r.get("status") in _NON_FAILURE_STATUSES)
+    if non_failing_count == len(results):
+        return "completed", "all modules completed or intentionally skipped"
+    failing = [r for r in results if r.get("status") not in _NON_FAILURE_STATUSES]
+    partial_reasons = [f"{r.get('module')}={r.get('status')}" for r in failing]
     return "partial", f"partial: {', '.join(partial_reasons)}"
 
 

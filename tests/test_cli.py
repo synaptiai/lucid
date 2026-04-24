@@ -182,6 +182,29 @@ def test_collect_prompt_versions_pins_every_enabled_module() -> None:
     assert set(versions_a_only.keys()) == {ModuleName.A_SPIRALBENCH}
 
 
+def test_audit_command_enables_module_g_last() -> None:
+    """The CLI's ``_build_enabled_modules`` helper (the function the
+    ``audit`` command calls to construct its enabled list) must include
+    Module G. This guards the invariant that attribution always runs
+    — without G, reports render with empty month/model charts.
+
+    Testing the helper directly rather than driving the full typer flow:
+    the full flow requires an ingest step + seeded corpus + dry-run
+    gating that adds surface area to the test without improving the
+    assertion. ``run_audit`` carries a second-line defensive append of
+    Module G, but the CLI-side invariant is tested here.
+    """
+    from lucid.cli import _build_enabled_modules
+    from lucid.schemas import ModuleName
+
+    enabled_with_d = _build_enabled_modules(include_module_d=True)
+    assert ModuleName.G_ATTRIBUTION in enabled_with_d
+
+    enabled_without_d = _build_enabled_modules(include_module_d=False)
+    assert ModuleName.G_ATTRIBUTION in enabled_without_d
+    assert ModuleName.D_PERSPECTIVE not in enabled_without_d
+
+
 # ----- helpers --------------------------------------------------------
 
 

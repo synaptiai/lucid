@@ -119,6 +119,32 @@ def _parse_projects(raw: str | None) -> tuple[str, ...] | None:
     return parts
 
 
+def _build_enabled_modules(*, include_module_d: bool) -> list[ModuleName]:
+    """Build the enabled-module list for an audit run.
+
+    Starts from :data:`lucid.cost.DEFAULT_MODULES`, conditionally adds
+    Module D (Jain perspective sycophancy) based on ``--include-module-d``,
+    then unconditionally appends Module G (deterministic attribution) so
+    the month/model charts in the report have data to plot.
+
+    Extracted from the ``audit`` command so the Module-G invariant is
+    unit-testable without driving the full typer flow. ``run_audit``
+    also defensively appends G, but keeping the CLI explicit preserves
+    the documented contract (cli.py Module G commentary).
+    """
+    enabled = list(DEFAULT_MODULES)
+    if include_module_d and ModuleName.D_PERSPECTIVE not in enabled:
+        enabled.append(ModuleName.D_PERSPECTIVE)
+    # Module G (deterministic attribution) runs last by convention
+    # from the scoring loop — it produces the time/model charts the
+    # report depends on and is cheap (no LLM). DEFAULT_MODULES omits
+    # G because its cost-estimate entry is trivially zero; the
+    # scoring loop still needs it in the enabled list.
+    if ModuleName.G_ATTRIBUTION not in enabled:
+        enabled.append(ModuleName.G_ATTRIBUTION)
+    return enabled
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Commands
 # ──────────────────────────────────────────────────────────────────────────
@@ -233,16 +259,7 @@ def audit(
         )
 
     # ----- Cost estimate ------------------------------------------
-    enabled = list(DEFAULT_MODULES)
-    if include_module_d and ModuleName.D_PERSPECTIVE not in enabled:
-        enabled.append(ModuleName.D_PERSPECTIVE)
-    # Module G (deterministic attribution) runs last by convention
-    # from the scoring loop — it produces the time/model charts the
-    # report depends on and is cheap (no LLM). DEFAULT_MODULES omits
-    # G because its cost-estimate entry is trivially zero; the
-    # scoring loop still needs it in the enabled list.
-    if ModuleName.G_ATTRIBUTION not in enabled:
-        enabled.append(ModuleName.G_ATTRIBUTION)
+    enabled = _build_enabled_modules(include_module_d=include_module_d)
 
     counter = _build_counter()
     estimator = CostEstimator(count_tokens=counter)
