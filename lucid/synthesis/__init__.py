@@ -10,5 +10,22 @@ See docs/plans/2026-04-24-synthesis-agent-refactor.md for the design.
 """
 
 from lucid.synthesis.handler import HeartbeatMonitor, dispatch_tool_call
+from lucid.synthesis.session import (
+    MANAGED_AGENTS_BETA_HEADER,
+    SynthesisConfig,
+    SynthesisHandles,
+    SynthesisOutcome,
+    SynthesisSession,
+)
+from lucid.synthesis.tools import build_synthesis_registry
 
-__all__ = ["HeartbeatMonitor", "dispatch_tool_call"]
+__all__ = [
+    "MANAGED_AGENTS_BETA_HEADER",
+    "HeartbeatMonitor",
+    "SynthesisConfig",
+    "SynthesisHandles",
+    "SynthesisOutcome",
+    "SynthesisSession",
+    "build_synthesis_registry",
+    "dispatch_tool_call",
+]
