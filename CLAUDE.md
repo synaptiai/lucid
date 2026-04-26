@@ -76,8 +76,8 @@ lucid/synthesis/
 lucid/modules/
   base.py                 CorpusModule / FindingsModule protocols
   embeddings.py           Voyage wrapper (OpenAI fallback)
-  module_a_spiralbench.py SpiralBench behavior scorer (13 behaviors)
-  module_b_sharma.py      Sharma paired-exchange (4 subroutines; 2 shipped)
+  module_a_spiralbench.py SpiralBench behavior scorer (17 behaviors)
+  module_b_sharma.py      Sharma paired-exchange (all 4 subroutines)
   module_c_syceval.py     Progressive/regressive classifier
   module_d_perspective.py Jain perspective sycophancy (default-on)
   module_e_beliefshift.py DCS-simplified belief drift
