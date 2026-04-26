@@ -88,24 +88,99 @@ $EDITOR .env.local
 # VOYAGE_API_KEY=pa-...                  required for Module H (memory audit)
 ```
 
+`ANTHROPIC_API_KEY` powers every module's classification + the Opus 4.7
+synthesis writer + the Sonnet 4.6 post-processor. `VOYAGE_API_KEY`
+powers the embeddings retrieval that backs Module H's memory audit. If
+`VOYAGE_API_KEY` is unset, Module H still runs but in degraded retrieval
+mode (no embeddings — claim-corpus matching falls back to lexical
+overlap), and the run logs a warning. The other modules are unaffected.
+
+### Get your Claude.ai export (for `--source claude-ai`)
+
+1. Visit [claude.ai/settings/data-privacy-controls](https://claude.ai/settings/data-privacy-controls).
+2. Click **Export data**. Anthropic emails you a download link within
+   ~24 hours.
+3. Unzip the archive somewhere local. The unzipped directory contains
+   `conversations.json`, `projects.json`, and `memories.json` — point
+   `--path` at that directory.
+
+Claude Code sessions need no export step — they live at
+`~/.claude/projects/` already.
+
 ## Run
 
-```bash
-# Estimate cost first — parses the corpus, samples it, and prints a per-module
-# token / USD breakdown. No LLM calls, no spend.
-uv run lucid audit --source claude-code --path ~/.claude/projects --sample 5 --dry-run
+### Quick start
 
-# Real audit on a 5-conversation sample. Typical cost: $2–4.
-uv run lucid audit --source claude-code --path ~/.claude/projects --sample 5 \
-    --yes-i-authorize-spend-up-to 10
+```bash
+# Dry-run: parses the corpus, samples it, prints a per-module token / USD
+# breakdown. No LLM calls, no spend. Always run this first.
+uv run lucid audit --source claude-code --path ~/.claude/projects --sample 100 --dry-run
+
+# Real audit on the default 100-conversation sample. Costs vary widely with
+# conversation length — always check the dry-run estimate first and set
+# --yes-i-authorize-spend-up-to to that number rounded up.
+LUCID_ALLOW_UNATTENDED=1 uv run lucid audit \
+    --source claude-code --path ~/.claude/projects --sample 100 \
+    --yes-i-authorize-spend-up-to 60
 ```
 
 The HTML report lands at `report/<run-id>.html` — a static file with no
 external scripts and a strict `default-src 'none'` content security policy.
-Open it in any browser.
+Open it in any browser. A 12-slide demo deck is rendered alongside at
+`report/lucid-deck.html` (←/→ navigates, `N` toggles presenter notes,
+`P` prints).
 
-A 12-slide demo deck is rendered alongside at `report/lucid-deck.html`.
-Press `←`/`→` to navigate, `N` for presenter notes, `P` to print.
+### Common workflows
+
+```bash
+# Audit a Claude.ai export (memories.json + conversations.json + projects.json)
+uv run lucid audit --source claude-ai --path ./claude-export-2026-04 --dry-run
+
+# Restrict to specific projects (slugs for claude-code, UUIDs for claude-ai)
+uv run lucid audit --source claude-code --path ~/.claude/projects \
+    --projects -Users-you-lucid,-Users-you-other-repo \
+    --sample 50 --dry-run
+
+# Cheaper run: skip Module D (perspective sycophancy — the most expensive module).
+# Drops ~30% of the bill.
+uv run lucid audit --source claude-code --path ~/.claude/projects \
+    --sample 100 --no-include-module-d --dry-run
+
+# Skip the synthesis phase. Scoring still runs, findings still persist,
+# the report still renders charts + tables, but narrative sections are
+# replaced with a banner. Eliminates the Opus 4.7 writer cost (the
+# single most expensive line item on most runs).
+uv run lucid audit --source claude-code --path ~/.claude/projects \
+    --sample 100 --no-synthesis --yes-i-authorize-spend-up-to 30
+
+# Audit everything (no sampling). Only sane on small corpora.
+uv run lucid audit --source claude-ai --path ./claude-export-2026-04 \
+    --sample all --dry-run
+```
+
+### Flag reference
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--source` | required | `claude-code`, `claude-ai`, or `all` (`all` shares one `--path` for both adapters; uncommon — typically pick one source per run) |
+| `--path` | required | Directory for the chosen source. `~/.claude/projects` for claude-code; the unzipped export folder for claude-ai. |
+| `--sample` | `100` | Integer cap or `all`. Stratified by project, recency-weighted. |
+| `--projects` | (all) | Comma-separated project slugs (claude-code) or UUIDs (claude-ai) |
+| `--dry-run` | off | Estimate cost without spending. **Always run first.** |
+| `--no-include-module-d` | (D on) | Skip the perspective-sycophancy module on tight-budget runs |
+| `--no-synthesis` | (synth on) | Skip the Opus 4.7 narrative phase. Findings still persist. |
+| `--yes-i-authorize-spend-up-to` | `0` | Pre-authorize spend in whole USD. Required when estimate > $20. |
+| `LUCID_ALLOW_UNATTENDED=1` | (interactive) | Env var. Skips the interactive cost-gate prompt. Required for CI / scripted runs. |
+| `--log-level` | `INFO` | `DEBUG` shows every per-turn classification; redacts user content automatically. |
+
+### Cost gate
+
+Lucid prices the run before any LLM call hits the wire (via
+`messages.count_tokens` — free, separate rate-limit pool). If the
+estimate exceeds **$20**, the run halts and asks for confirmation.
+Pass `--yes-i-authorize-spend-up-to N` (whole dollars) to pre-authorize.
+The gate is in `lucid/cost.py::COST_GATE_USD` if you want to see how
+it's wired.
 
 ### See a sample report without running an audit
 
@@ -115,7 +190,86 @@ open report/lucid-demo.html
 ```
 
 The demo renders against a synthetic corpus with pre-fabricated findings
-for every detected pattern class. No API calls, no cost.
+for every detected pattern class. No API calls, no cost. Good for
+deciding whether the output format is useful before spending anything.
+
+### Exit codes (useful for scripting)
+
+| Code | Meaning |
+|---|---|
+| `0` | Audit completed successfully |
+| `2` | Usage / config / input error (bad path, zero conversations, missing key) |
+| `3` | Cost-gate rejection — estimate exceeded `--yes-i-authorize-spend-up-to` |
+| `4` | Concurrent-audit lock collision (another `lucid audit` is running on the same DB) |
+
+---
+
+## Other commands
+
+### `lucid calibrate` — verify Module A still agrees with Spiral-Bench
+
+```bash
+# Re-run the full calibration pipeline against Spiral-Bench v1.2.
+# ~$46 projected spend; requires ANTHROPIC_API_KEY.
+uv run lucid calibrate --module a --auto-judge --yes-i-authorize-spend-up-to 50
+
+# Or, if you already have human + judge label JSONLs, compute IAA only
+# (no LLM spend, just statistics):
+uv run lucid calibrate --module a \
+    --human-labels path/to/human.jsonl \
+    --judge-labels path/to/judge.jsonl
+```
+
+Outputs Krippendorff α, Gwet AC1, Cohen κ, and QWK on intensity, each
+with 95% BCa bootstrap CIs. Artifacts land in `calibration-runs/`.
+See [`docs/calibration.md`](docs/calibration.md) for the full protocol.
+
+### `lucid cleanup-agents` — prune stale Managed Agents
+
+Each synthesis run registers a `lucid-synthesis-v<N>` agent in your
+Anthropic account. After a prompt-version bump, the previous agent is
+stale but stays registered. Clean them up:
+
+```bash
+# Preview what would be archived
+uv run lucid cleanup-agents --dry-run
+
+# Archive stale synthesis agents + any legacy lucid-orchestrator-* agents
+uv run lucid cleanup-agents
+
+# Full sweep — archive every lucid-* agent (use before a clean re-run)
+uv run lucid cleanup-agents --all
+```
+
+### `lucid version` — print the installed version
+
+```bash
+uv run lucid version
+```
+
+---
+
+## Reading the report
+
+Each `report/<run-id>.html` opens with a stacked-radial concern footprint
+chart and seven sections:
+
+1. **Executive summary** — what was sampled, what ran, headline shape.
+2. **Headline findings** — strongest signals (or strongest absences).
+3. **Module narratives (A–F, H)** — per-module prose with `[F:id]`
+   citation links to the evidence cards below. A module with zero
+   findings declines narration explicitly rather than fabricating one.
+4. **Module G — attribution** — time/model bucketing of every finding.
+   Deterministic, no LLM call.
+5. **Top 3 actions** — Opus 4.7's suggested follow-ups, citation-bound.
+6. **Evidence appendix** — every finding as a card with verbatim quotes,
+   intensity, confidence + CI, model attribution, and source citation.
+7. **Provenance footer** — corpus fingerprint, prompt versions, model
+   IDs, sampling seed. Sufficient to reproduce the run.
+
+If a module's section reads "Section skipped: insufficient evidence",
+that's the `INSUFFICIENT_EVIDENCE` contract working — the agent
+declined rather than padding. Treat declines as data.
 
 ---
 
