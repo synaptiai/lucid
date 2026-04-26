@@ -41,6 +41,29 @@
 
 Metrics carry 95% BCa bootstrap CIs. Implementation: `lucid.calibration.validate` (hand-rolled Gwet AC1, Cohen κ, QWK; Krippendorff α via the `krippendorff` library).
 
+## Provenance
+
+The full prod3 calibration artefacts are committed at
+`calibration-runs/prod3/auto-20260422T032452Z/`. This is the single
+exception to the `calibration-runs/` gitignore rule (which otherwise
+keeps personal-corpus calibration data off the repo). The directory
+contains:
+
+- `report_pooled.md` — the per-behavior table above, rendered from the
+  judgement files.
+- `judgements/module_a_c10.jsonl` (and `..._c2.jsonl`) — Module A's
+  per-turn labels at chunk size 10 (shipped) and 2 (sensitivity sweep).
+- `judgements/sb_*.jsonl` — Spiral-Bench v1.2's three reference judges
+  (Claude Sonnet 4.5, GPT-5 2025-08-07, Kimi K2), collapsed across the
+  three target-model corpora.
+- `disagreements.jsonl` — top-50 highest-information disagreements,
+  used by the `lucid calibrate --import-verified` re-run path once
+  human ground truth lands.
+
+Privacy: every judgement carries `turn_content_sha256: null` because
+the source corpus is the public Spiral-Bench v1.2 benchmark (MIT) — no
+turn content is bundled, and no personal user data is in any file.
+
 ## Human audit status
 
 The top 50 disagreements (ranked by Shannon-entropy × rare-behavior bonus) have been exported to `calibration-runs/prod3/auto-20260422T032452Z/disagreements.jsonl`. The post-audit re-run via `lucid calibrate --import-verified` will update these numbers with human ground truth on the highest-information cells.

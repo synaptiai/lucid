@@ -45,7 +45,15 @@ corpus/
 # demo/corpus/ is a committed synthetic fixture — exempt from the corpus/ rule.
 !demo/corpus/
 !demo/corpus/**
-calibration-runs/
+# calibration-runs/ holds personal calibration runs (against user corpora)
+# which must never be committed. Pattern uses /* not / so the prod3
+# exception below can re-include — git can't re-include children of an
+# excluded parent directory.
+calibration-runs/*
+# Exception: the canonical prod3 Module A SpiralBench run is the
+# provenance for the calibration numbers cited in README.md and
+# docs/calibration.md. Public Spiral-Bench v1.2 corpus only — no user data.
+!calibration-runs/prod3/
 .audit-logs/
 .imports/
 
