@@ -394,14 +394,10 @@ class ReportSection(BaseModel):
                     f"got {len(self.cited_turn_ids)} entries"
                 )
             if self.decline_reason is None or self.decline_reason.strip() == "":
-                raise ValueError(
-                    "insufficient_evidence=True requires a non-empty decline_reason"
-                )
+                raise ValueError("insufficient_evidence=True requires a non-empty decline_reason")
         else:
             if self.markdown == "":
-                raise ValueError(
-                    "insufficient_evidence=False requires non-empty markdown"
-                )
+                raise ValueError("insufficient_evidence=False requires non-empty markdown")
             if self.decline_reason is not None:
                 raise ValueError(
                     "insufficient_evidence=False requires decline_reason is None; "

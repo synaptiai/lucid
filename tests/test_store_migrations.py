@@ -279,17 +279,13 @@ def test_real_m_003_migration_adds_blocks_and_confidence_columns(
     try:
         (uv,) = conn.execute("PRAGMA user_version;").fetchone()
         assert uv == SCHEMA_VERSION
-        cols = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(report_sections);").fetchall()
-        }
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(report_sections);").fetchall()}
         assert "blocks_json" in cols
         assert "citation_confidence" in cols
 
         # Pre-existing row should have the defaults backfilled.
         row = conn.execute(
-            "SELECT blocks_json, citation_confidence FROM report_sections "
-            "WHERE id = 'rs-legacy'"
+            "SELECT blocks_json, citation_confidence FROM report_sections WHERE id = 'rs-legacy'"
         ).fetchone()
         assert row[0] == "[]"
         assert row[1] is None

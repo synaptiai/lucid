@@ -599,8 +599,17 @@ def test_report_sections_check_insufficient_requires_empty_citations(tmp_path):
                 "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
                 "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
                 "decline_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                ("rs-bad", "run-inv1", "exec_summary", "",
-                 '["f1"]', "[]", 1, "declined", "2026-04-24T10:00:00+00:00"),
+                (
+                    "rs-bad",
+                    "run-inv1",
+                    "exec_summary",
+                    "",
+                    '["f1"]',
+                    "[]",
+                    1,
+                    "declined",
+                    "2026-04-24T10:00:00+00:00",
+                ),
             )
             conn.commit()
 
@@ -617,8 +626,17 @@ def test_report_sections_check_insufficient_requires_decline_reason(tmp_path):
                 "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
                 "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
                 "decline_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                ("rs-bad2", "run-inv2", "exec_summary", "",
-                 "[]", "[]", 1, None, "2026-04-24T10:00:00+00:00"),
+                (
+                    "rs-bad2",
+                    "run-inv2",
+                    "exec_summary",
+                    "",
+                    "[]",
+                    "[]",
+                    1,
+                    None,
+                    "2026-04-24T10:00:00+00:00",
+                ),
             )
             conn.commit()
 
@@ -635,8 +653,17 @@ def test_report_sections_check_populated_rejects_decline_reason(tmp_path):
                 "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
                 "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
                 "decline_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                ("rs-bad3", "run-inv3", "exec_summary", "populated",
-                 "[]", "[]", 0, "should not be here", "2026-04-24T10:00:00+00:00"),
+                (
+                    "rs-bad3",
+                    "run-inv3",
+                    "exec_summary",
+                    "populated",
+                    "[]",
+                    "[]",
+                    0,
+                    "should not be here",
+                    "2026-04-24T10:00:00+00:00",
+                ),
             )
             conn.commit()
 
@@ -653,8 +680,17 @@ def test_report_sections_check_section_id_length_cap(tmp_path):
                 "INSERT INTO report_sections(id, audit_run_id, section_id, markdown, "
                 "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
                 "decline_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                ("rs-bad4", "run-inv4", "x" * 65, "populated",
-                 "[]", "[]", 0, None, "2026-04-24T10:00:00+00:00"),
+                (
+                    "rs-bad4",
+                    "run-inv4",
+                    "x" * 65,
+                    "populated",
+                    "[]",
+                    "[]",
+                    0,
+                    None,
+                    "2026-04-24T10:00:00+00:00",
+                ),
             )
             conn.commit()
 
@@ -766,19 +802,23 @@ def test_fetch_report_sections_ordering(tmp_path):
     with CorpusStore(db) as store:
         _seed_audit_run(store, run_id="run-ut5")
         for section_id in ["module_b_narrative", "exec_summary", "top_3_actions"]:
-            store.upsert_report_section(ReportSection(
-                audit_run_id="run-ut5",
-                section_id=section_id,
-                markdown=f"prose for {section_id}",
-                cited_finding_ids=[],
-                cited_turn_ids=[],
-                insufficient_evidence=False,
-                decline_reason=None,
-                created_at=datetime.now(tz=UTC),
-            ))
+            store.upsert_report_section(
+                ReportSection(
+                    audit_run_id="run-ut5",
+                    section_id=section_id,
+                    markdown=f"prose for {section_id}",
+                    cited_finding_ids=[],
+                    cited_turn_ids=[],
+                    insufficient_evidence=False,
+                    decline_reason=None,
+                    created_at=datetime.now(tz=UTC),
+                )
+            )
         rows = store.fetch_report_sections_for_run("run-ut5")
         assert [r.section_id for r in rows] == [
-            "exec_summary", "module_b_narrative", "top_3_actions",
+            "exec_summary",
+            "module_b_narrative",
+            "top_3_actions",
         ]
 
 
@@ -859,10 +899,12 @@ def test_report_section_upsert_updates_blocks_post_hoc(tmp_path):
         store.upsert_report_section(base)
         # Post-process upsert (Phase 5.6b): same section_id + audit_run_id,
         # preserves id via ON CONFLICT, adds blocks + confidence.
-        enriched = base.model_copy(update={
-            "blocks": [SynthesisBlock(text="Prose.", citations=["f1"])],
-            "citation_confidence": 0.9,
-        })
+        enriched = base.model_copy(
+            update={
+                "blocks": [SynthesisBlock(text="Prose.", citations=["f1"])],
+                "citation_confidence": 0.9,
+            }
+        )
         store.upsert_report_section(enriched)
         rows = store.fetch_report_sections_for_run("run-blocks-3")
         assert len(rows) == 1
@@ -883,7 +925,18 @@ def test_report_section_check_rejects_confidence_out_of_range(tmp_path):
                 "cited_finding_ids_json, cited_turn_ids_json, insufficient_evidence, "
                 "decline_reason, created_at, blocks_json, citation_confidence) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                ("rs-oob", "run-blocks-4", "exec_summary", "prose",
-                 "[]", "[]", 0, None, "2026-04-24T10:00:00+00:00", "[]", 1.5),
+                (
+                    "rs-oob",
+                    "run-blocks-4",
+                    "exec_summary",
+                    "prose",
+                    "[]",
+                    "[]",
+                    0,
+                    None,
+                    "2026-04-24T10:00:00+00:00",
+                    "[]",
+                    1.5,
+                ),
             )
             conn.commit()

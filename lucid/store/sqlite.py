@@ -400,9 +400,7 @@ class CorpusStore:
         preserving the row id.
         """
         now_iso = section.created_at.isoformat()
-        blocks_json = orjson.dumps(
-            [b.model_dump(mode="json") for b in section.blocks]
-        ).decode()
+        blocks_json = orjson.dumps([b.model_dump(mode="json") for b in section.blocks]).decode()
         self.connect().execute(
             """
             INSERT INTO report_sections (

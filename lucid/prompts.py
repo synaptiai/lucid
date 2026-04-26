@@ -215,9 +215,7 @@ def load_prompt(
     ]
     path = next((p for p in candidates if p.is_file()), None)
     if path is None:
-        raise FileNotFoundError(
-            f"prompt file not found; tried {[str(c) for c in candidates]}"
-        )
+        raise FileNotFoundError(f"prompt file not found; tried {[str(c) for c in candidates]}")
 
     text = path.read_text(encoding="utf-8")
     fm, body = _parse_frontmatter(text)
@@ -233,9 +231,7 @@ def load_prompt(
     if is_module_layout:
         missing_module = _REQUIRED_MODULE_KEYS - fm.keys()
         if missing_module:
-            raise ValueError(
-                f"{path}: frontmatter missing keys {sorted(missing_module)}"
-            )
+            raise ValueError(f"{path}: frontmatter missing keys {sorted(missing_module)}")
 
     body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
     if fm["hash"] != body_hash:

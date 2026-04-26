@@ -1,4 +1,5 @@
 """Tests for the deterministic scoring loop in lucid.run."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -65,11 +66,21 @@ async def test_run_scoring_loop_invokes_every_enabled_module_in_order(monkeypatc
     running_lines = [m for level, m in progress if "Running module" in m]
     assert running_lines == ["Running module A", "Running module B", "Running module G"]
     # Every call forwarded the full contract kwarg set — drift guard.
-    expected_kwargs = frozenset({
-        "module", "conversation_ids", "store", "audit_run_id",
-        "anthropic_client", "embedding_provider", "allow_module_d",
-        "progress_log", "per_module_usd", "debited_modules", "spend_tracker",
-    })
+    expected_kwargs = frozenset(
+        {
+            "module",
+            "conversation_ids",
+            "store",
+            "audit_run_id",
+            "anthropic_client",
+            "embedding_provider",
+            "allow_module_d",
+            "progress_log",
+            "per_module_usd",
+            "debited_modules",
+            "spend_tracker",
+        }
+    )
     for keys in kwarg_keys_per_call:
         assert keys == expected_kwargs
 
@@ -108,6 +119,7 @@ async def test_run_scoring_loop_empty_enabled_modules_returns_empty(monkeypatch)
 async def test_run_scoring_loop_propagates_exception(monkeypatch):
     """Per-module transport-level exceptions propagate (the loop does not
     swallow them — upstream decides audit-run status)."""
+
     async def _spy(**_) -> dict[str, Any]:
         raise RuntimeError("anthropic down")
 
