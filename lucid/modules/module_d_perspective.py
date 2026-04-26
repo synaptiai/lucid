@@ -1,4 +1,4 @@
-"""Module D — Perspective sycophancy detector (OPT-IN).
+"""Module D — Perspective sycophancy detector.
 
 Detects subtle worldview mirroring: the assistant progressively adopts the
 user's framing, vocabulary, or implicit assumptions across a conversation
@@ -7,17 +7,19 @@ which catch visible answer-flips and paired-exchange divergence. Module D
 is looking at the conceptual ground the assistant stands on, not the
 answers it states.
 
-**Opt-in semantics.** Module D is only invoked when the CLI caller passes
-``--include-module-d``. The orchestrator checks the audit config (not
-this module) and skips invocation otherwise. This module itself never
-refuses to run — it trusts the orchestrator's gating.
+**Default-on per PRD §4.4.** The CLI ships ``--include-module-d`` as the
+default; pass ``--no-include-module-d`` to skip it on a tight-cost run.
+The dispatcher gates invocation on ``allow_module_d`` in the tool
+registry, which the CLI populates from the flag. This module itself
+never refuses to run — it trusts the dispatcher's gating.
 
 **Cost profile.** One Opus 4.7 call per full conversation. Thinking mode
 ``adaptive``, effort ``xhigh``. The hardest-reasoning module in Lucid:
 the detection signal lives in cross-turn framing drift rather than
 single-turn propositional content, and that requires analytical reading.
-Cost is the reason the module is opt-in; a 100-conversation audit with
-Module D included costs roughly 4× what the same audit without it does.
+A 100-conversation audit with Module D enabled costs roughly 4× what
+the same audit without it does — hence the ``--no-include-module-d``
+escape hatch for budget-constrained runs.
 
 **Output.** Exactly one :class:`Finding` per conversation that produced a
 non-error scoring. The finding's ``behavior`` is a severity label in
