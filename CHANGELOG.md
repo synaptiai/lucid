@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GitHub Actions CI** — `.github/workflows/ci.yml` runs
+  `ruff check` + `ruff format --check` + `mypy --strict` + `pytest -q`
+  on push to `main` and on every pull request. Public proof of green;
+  the previous local-only quality gates were not visible to contributors.
+- **Module H six-verdict adversarial fixture suite**
+  (`tests/test_module_h_verdicts.py`) — one targeted end-to-end test per
+  `MemorySupport` value (well-supported, weakly-supported, unsupported,
+  contradicted, insufficient-data, out-of-scope). Probes the plumbing
+  for each verdict; does not measure the classifier's decision boundary.
+  Suite description committed at `tests/fixtures/module_h_verdicts/README.md`.
+- **Calibration provenance committed.** The canonical prod3 Module A
+  Spiral-Bench v1.2 calibration run (`calibration-runs/prod3/auto-20260422T032452Z/`)
+  is now tracked in git as the single exception to the `calibration-runs/`
+  gitignore rule. Public Spiral-Bench corpus only — no user data.
+  Backs the per-behavior Gwet AC1 table cited in `README.md` and
+  `docs/calibration.md`.
+- **README *Reproducibility* section** — explicit per-phase determinism
+  guarantees: Phase 1 deterministic given (corpus, seed, prompt hash,
+  model id); Phase 2 adaptive prose; Phase 3 schema-bound stable.
+  Pre-empts "I re-ran and the report changed" objections.
+
+### Changed
+
+- **README ↔ CLAUDE.md ↔ PRD drift fixed** for Module A behavior count.
+  README's "17 assistant behaviors" was correct (the rubric scopes 17,
+  the prompt scopes 17, the code emits 17). CLAUDE.md's "13 behaviors"
+  and PRD §4.1's "13 of 17 ship" were stale — both now corrected to 17.
+  PRD §4.1 explains why the build reversed the earlier 3-sentience-claim
+  exclusion plan: rubric fidelity to published Spiral-Bench outweighed
+  the personal-audit-vs-model-eval distinction.
+- **README *Honest limitations* expanded** with explicit notes on:
+  - Modules B/D/E/F/H lack public ground truth datasets;
+  - Module C is a meta-classifier bounded by A's and B's noise floor;
+  - `--resume` is Phase 6 (not yet wired).
+- **Source code formatted** end-to-end via `ruff format`. Six files
+  (`lucid/prompts.py`, `lucid/schemas.py`, `lucid/store/sqlite.py`,
+  `tests/test_run_scoring_loop.py`, `tests/test_store.py`,
+  `tests/test_store_migrations.py`) had pre-existing formatting drift
+  from before the `format_python.sh` PostToolUse hook landed; CI's
+  `ruff format --check` step would otherwise be red on first push.
+
 - **Synthesis phase** — agent-driven narrative writer for report
   sections. Claude Opus 4.7 writes `exec_summary`, `top_3_actions`,
   `headline_findings`, and per-module narratives (A, B, C, D, E, F, H)
