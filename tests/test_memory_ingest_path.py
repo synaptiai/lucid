@@ -122,8 +122,10 @@ def test_persist_memories_warns_on_malformed_file(
         {Source.CLAUDE_AI: bad_export},
     )
     assert persisted == 0
-    # Collapse whitespace before substring search: rich wraps long paths
-    # to terminal width, which on narrow CI runners splits ``memories.json``
-    # across a line break (e.g. ``memori\nes.json``).
-    out_collapsed = " ".join(capsys.readouterr().out.split())
-    assert "Skipping" in out_collapsed and "memories.json" in out_collapsed
+    # Strip newlines (not whitespace) before substring search: rich
+    # wraps long paths to terminal width, which on narrow CI runners
+    # splits ``memories.json`` mid-token (e.g. ``memori\nes.json``).
+    # ``replace("\n", "")`` rejoins the token; collapsing whitespace
+    # would leave a stray space mid-filename.
+    out_unwrapped = capsys.readouterr().out.replace("\n", "")
+    assert "Skipping" in out_unwrapped and "memories.json" in out_unwrapped
