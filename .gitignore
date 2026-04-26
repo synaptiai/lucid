@@ -49,8 +49,15 @@ calibration-runs/
 .audit-logs/
 .imports/
 
-# Claude Code workspace (local-only)
-.claude/
+# Claude Code workspace
+# Tracked: settings.json, hooks/, agents/, project-owned skills.
+# Untracked: personal settings, runtime lock, OS noise, inherited third-party skills.
+.claude/.DS_Store
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/skills/*
+!.claude/skills/bump-prompt-version/
+!.claude/skills/add-detection-module/
 
 # IDE
 .idea/
