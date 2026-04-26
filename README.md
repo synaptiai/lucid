@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/release/python-3130/)
-[![Tests](https://img.shields.io/badge/tests-730_passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-736_passing-brightgreen.svg)](#testing)
 
 **An epistemic audit for your conversations with Claude.**
 
@@ -125,7 +125,7 @@ for every detected pattern class. No API calls, no cost.
 |---|---|---|
 | **A — Spiral-Bench** | 17 assistant behaviors at intensity 1–3 (sycophancy, pushback, escalation, delusion reinforcement, harmful advice, validate-feelings-not-thoughts, confident-bullshitting, …). | [Spiral-Bench v1.2](https://github.com/sam-paech/spiral-bench) |
 | **B — Sharma sycophancy** | All 4 subroutines: feedback sycophancy (direction flips on similar content under opposite user sentiment), answer sycophancy (cave-ins on correct answers under pressure), mimicry, and "are you sure" sycophancy. | [Sharma et al. 2023](https://arxiv.org/abs/2310.13548) |
-| **C — SycEval** | Second-pass classifier over A's and B's sycophancy findings: progressive (cave-in landing on correct answer, low priority) vs. regressive (cave-in landing on wrong answer, the flag). | [Fanous & Goldberg 2025](https://arxiv.org/abs/2504.01727) |
+| **C — SycEval** | Second-pass classifier over A's and B's sycophancy findings: progressive (cave-in landing on correct answer, low priority) vs. regressive (cave-in landing on wrong answer, the flag). Module C is a *meta*-classifier — its agreement is bounded by A's and B's noise floor. | [Fanous & Goldberg 2025](https://arxiv.org/abs/2504.01727) |
 | **D — Perspective sycophancy** | Cross-turn framing / vocabulary / premise drift. The assistant progressively adopting the user's worldview without stating explicit agreement. Default-on; pass `--no-include-module-d` to skip on tight-cost runs. | Jain et al. 2025 |
 | **E — Belief drift** | Cross-conversation user position changes on recurring topics, classified evidence-driven (new info) vs. pressure-driven (Claude pushed back). | [BeliefShift](https://arxiv.org/abs/2603.23848) (DCS-simplified) |
 | **F — Influence Tactics** | 9 user-prompt influence tactics adapted from media-analysis literature to one-on-one dialogue: emotional triggers, urgent action demands, false dilemmas, authority overload, framing techniques, … | [Influence Tactics Protocol](https://github.com/synaptiai/influence-tactics-protocol) |
@@ -165,9 +165,10 @@ Full per-behavior table including Krippendorff's α in
 because 6 of 17 behaviors have prevalence below 10% or above 90% — the
 "agreement paradox" makes Cohen's κ misleading at those extremes.
 
-Modules B, D, E, F, H lack public ground truth datasets. Validation for
-those modules is by manual review of seeded test corpora; numbers will
-land in [`docs/calibration.md`](docs/calibration.md) as they're collected.
+Modules B, D, E, F, H lack public ground truth datasets — see *Honest
+limitations* below for what that means in practice. Module H ships a
+six-verdict adversarial fixture suite at
+`tests/fixtures/module_h_verdicts/`.
 
 ---
 
@@ -179,14 +180,58 @@ land in [`docs/calibration.md`](docs/calibration.md) as they're collected.
 - **Cohen's κ on intensity is currently incomplete.** The 5-rater
   calibration setup exceeds pairwise κ; pairwise tables will land as a
   follow-up.
+- **Modules B, D, E, F, H lack public ground truth.** Only Module A is
+  benchmarked against a public dataset (Spiral-Bench v1.2). The other
+  modules cite their source papers but their classifiers have not been
+  measured against held-out labelled examples from those papers — those
+  datasets aren't public. Validation for those modules is by manual
+  review of seeded test corpora plus, for Module H, the six-verdict
+  adversarial fixture suite at `tests/fixtures/module_h_verdicts/`.
+- **Module C is a meta-classifier.** It runs over A's and B's outputs;
+  its agreement floor is bounded by theirs. Treat C's progressive/
+  regressive split as a re-categorisation, not an independent measurement.
 - **The Sonnet post-processor is conservative.** Citation confidence
   scores cluster between 0.55 and 0.85 in practice — Sonnet penalizes
   any aggregate claim that isn't backed by an explicit tool-call result,
   and any block with zero citations.
+- **`--resume` is not yet wired** (Phase 6, post-hackathon). A failed
+  audit must be re-run from scratch; scoring-phase findings are
+  checkpointed to SQLite per module so the LLM spend on completed
+  modules is not repeated, but the CLI can't currently pick up where
+  it left off in one command.
 - **Pass `--no-synthesis`** to skip the agent narrative phase. The
   scoring phase still runs and the report still renders, with charts,
   tables, and evidence cards intact and a banner noting the narrative
   sections are deliberately absent.
+
+---
+
+## Reproducibility
+
+The three pipeline phases have different determinism guarantees by design:
+
+- **Phase 1 (scoring)** is deterministic given `(corpus, sample seed,
+  prompt hash, model id)`. Re-running the same audit on the same corpus
+  with the same flags produces a byte-identical `findings` table modulo
+  Anthropic-side stochasticity in classification (and even that is
+  bounded — Module A on Opus 4.7 with `effort=low` is highly stable).
+  This is what lets the calibration table above stay valid across
+  prompt-version bumps: the rubric is the calibration unit, not the
+  agent's free-form reasoning.
+- **Phase 2 (synthesis writing)** is *adaptive*. Same `findings` table →
+  different prose. What to say about a corpus depends on what's in it,
+  and Opus 4.7 makes judgement calls about emphasis. Running the same
+  audit twice will produce two reports whose factual claims are
+  identical (citations resolve to the same finding/turn IDs) but whose
+  narrative shape differs.
+- **Phase 3 (Sonnet structuring)** is `messages.parse()`-bound to a
+  Pydantic schema. Output is stable up to ordering of citation tokens
+  inside a block.
+
+Every finding records the `prompt_version` and `prompt_hash` that
+classified it, and every audit run records the model IDs in
+`detected_by`. Reproduction is "freeze the prompt, freeze the seed,
+re-run" — the deterministic phase will match; the prose won't.
 
 ---
 
@@ -220,7 +265,7 @@ land in [`docs/calibration.md`](docs/calibration.md) as they're collected.
 ## Testing
 
 ```bash
-uv run pytest                          # 730 tests, ~5s
+uv run pytest                          # 736 tests, ~6s
 uv run mypy lucid/ --strict            # strict type checking
 uv run ruff check lucid/ tests/        # linting
 ```
